@@ -31,27 +31,32 @@ body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: var(--surface-gray);
+  background-color: var(--hinge-white);
   color: var(--hinge-black);
 }
 
-/* Hinge-style mobile container */
+/* Responsive container */
 .app-container {
-  max-width: 430px;
-  margin: 0 auto;
+  width: 100%;
   min-height: 100dvh;
   background-color: var(--hinge-white);
   position: relative;
-  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
 
-@media (min-width: 640px) {
-  .app-container {
-    box-shadow: 0 0 40px rgba(0, 0, 0, 0.04);
-    border-left: 1px solid var(--border-gray);
-    border-right: 1px solid var(--border-gray);
+/* Tablet centered */
+@media (min-width: 768px) {
+  .app-container.centered {
+    max-width: 768px;
+    margin: 0 auto;
+  }
+}
+
+/* Desktop with max-width */
+@media (min-width: 1024px) {
+  .app-container.centered {
+    max-width: 1200px;
   }
 }
 
@@ -189,15 +194,13 @@ body {
   z-index: 40;
 }
 
-/* Bottom navigation */
+/* Bottom navigation - mobile only */
 .bottom-nav {
   position: fixed;
   bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 100%;
-  max-width: 430px;
-  background-color: rgba(255, 255, 253, 0.9);
+  left: 0;
+  right: 0;
+  background-color: rgba(255, 255, 253, 0.95);
   backdrop-filter: blur(16px);
   border-top: 1px solid var(--border-gray);
   padding: 12px 24px;
@@ -206,6 +209,36 @@ body {
   justify-content: space-around;
   align-items: center;
   z-index: 50;
+}
+
+@media (min-width: 1024px) {
+  .bottom-nav {
+    display: none;
+  }
+}
+
+/* Sidebar - desktop only */
+.sidebar {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 240px;
+    min-height: 100vh;
+    background-color: var(--hinge-white);
+    border-right: 1px solid var(--border-gray);
+    padding: 24px;
+    position: fixed;
+    left: 0;
+    top: 0;
+  }
+  
+  .main-with-sidebar {
+    margin-left: 240px;
+  }
 }
 
 /* Scrollbar styling */
@@ -368,7 +401,119 @@ input[type="range"]::-moz-range-thumb {
   background-color: var(--hinge-white);
 }
 
-/* Safe area padding for bottom nav pages */
+/* Safe area padding for bottom nav pages - mobile only */
 .pb-nav {
   padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+}
+
+@media (min-width: 1024px) {
+  .pb-nav {
+    padding-bottom: 0;
+  }
+}
+
+/* Sidebar nav item */
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-weight: 500;
+  color: var(--dove-gray);
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.sidebar-nav-item:hover {
+  background-color: var(--surface-gray);
+  color: var(--hinge-black);
+}
+
+.sidebar-nav-item.active {
+  background-color: var(--accent-lilac);
+  color: var(--hinge-black);
+}
+
+/* Responsive grid utilities */
+.photo-grid-responsive {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .photo-grid-responsive {
+    gap: 16px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .photo-grid-responsive {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+}
+
+/* Feature cards grid */
+.feature-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (min-width: 1024px) {
+  .feature-grid {
+    flex-direction: row;
+    gap: 24px;
+  }
+  
+  .feature-grid > * {
+    flex: 1;
+  }
+}
+
+/* Two column layout for desktop */
+.two-col-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+@media (min-width: 1024px) {
+  .two-col-layout {
+    flex-direction: row;
+    gap: 40px;
+  }
+  
+  .two-col-layout > .col-left {
+    flex: 1;
+  }
+  
+  .two-col-layout > .col-right {
+    flex: 1;
+  }
+}
+
+/* Rate others desktop layout */
+.rate-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+@media (min-width: 1024px) {
+  .rate-layout {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 48px;
+  }
+  
+  .rate-layout > .rate-photo {
+    flex: 0 0 400px;
+  }
+  
+  .rate-layout > .rate-controls {
+    flex: 1;
+  }
 }

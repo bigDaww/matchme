@@ -5,6 +5,7 @@ import { ArrowLeft, Upload, X, Image } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { useAuth, API } from '../App';
+import Layout from '../components/Layout';
 
 const ProfileAnalysis = () => {
   const navigate = useNavigate();
@@ -91,142 +92,168 @@ const ProfileAnalysis = () => {
   };
 
   return (
-    <div className="app-container">
-      {/* Top Bar */}
-      <div className="top-bar border-b border-[#E5E5E5]">
-        <button 
-          onClick={() => navigate('/dashboard')}
-          className="p-2 -ml-2"
-          data-testid="back-btn"
-        >
-          <ArrowLeft size={24} strokeWidth={1.5} />
-        </button>
-        <h1 className="font-heading text-xl" style={{ fontFamily: 'Georgia, serif' }}>
-          Profile Analysis
-        </h1>
-        <div className="w-10" />
-      </div>
-
-      <div className="flex-1 px-6 py-6 overflow-y-auto">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <p className="text-[#666666] text-center mb-6">
-            Upload 4-6 photos plus your bio for a complete profile review.
-          </p>
-
-          {/* Drop Zone */}
-          {photos.length < 6 && (
-            <div
-              className={`drop-zone mb-6 ${dragOver ? 'dragging' : ''}`}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={() => document.getElementById('file-input').click()}
-              data-testid="drop-zone"
-            >
-              <input
-                id="file-input"
-                type="file"
-                accept="image/jpeg,image/png"
-                multiple
-                onChange={(e) => handleFiles(e.target.files)}
-                className="hidden"
-              />
-              {uploading ? (
-                <div className="w-8 h-8 border-2 border-[#1A1A1A] border-t-transparent rounded-full animate-spin mx-auto" />
-              ) : (
-                <>
-                  <Upload size={32} className="mx-auto mb-3 text-[#666666]" strokeWidth={1.5} />
-                  <p className="text-[#1A1A1A] font-medium mb-1">Drop photos here</p>
-                  <p className="text-sm text-[#666666]">or tap to browse • JPG/PNG, max 10MB</p>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Photo Grid */}
-          {photos.length > 0 && (
-            <div className="grid grid-cols-3 gap-2 mb-6">
-              {photos.map((photo, index) => (
-                <motion.div
-                  key={photo.photo_id}
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="relative"
-                >
-                  <img
-                    src={photo.preview}
-                    alt={`Photo ${index + 1}`}
-                    className="aspect-[3/4] object-cover rounded-[12px] border border-[#E5E5E5] w-full"
-                  />
-                  <button
-                    onClick={() => removePhoto(index)}
-                    className="absolute top-1 right-1 w-6 h-6 bg-white rounded-full shadow-md flex items-center justify-center"
-                    data-testid={`remove-photo-${index}`}
-                  >
-                    <X size={12} />
-                  </button>
-                </motion.div>
-              ))}
-            </div>
-          )}
-
-          <p className="text-center text-sm text-[#666666] mb-6">
-            {photos.length}/6 photos • Need at least 4
-          </p>
-
-          {/* Bio */}
-          <div className="mb-6">
-            <label className="text-sm text-[#666666] uppercase tracking-wider mb-2 block">
-              Your Bio (optional)
-            </label>
-            <textarea
-              value={bio}
-              onChange={(e) => setBio(e.target.value)}
-              placeholder="Paste your dating app bio here..."
-              className="w-full p-4 rounded-[12px] bg-[#F7F7F5] border-none resize-none h-24 outline-none focus:ring-2 focus:ring-[#C9B8E8]"
-              data-testid="bio-input"
-            />
-          </div>
-
-          {/* Prompt Answer */}
-          <div className="mb-6">
-            <label className="text-sm text-[#666666] uppercase tracking-wider mb-2 block">
-              Prompt Answer (optional)
-            </label>
-            <textarea
-              value={promptAnswer}
-              onChange={(e) => setPromptAnswer(e.target.value)}
-              placeholder="Paste one of your prompt answers..."
-              className="w-full p-4 rounded-[12px] bg-[#F7F7F5] border-none resize-none h-24 outline-none focus:ring-2 focus:ring-[#C9B8E8]"
-              data-testid="prompt-input"
-            />
-          </div>
-
-          {/* Submit Button */}
-          <button
-            onClick={handleSubmit}
-            disabled={photos.length < 4 || submitting}
-            className={`btn-pill w-full ${
-              photos.length >= 4 ? 'btn-primary' : 'btn-secondary opacity-50'
-            }`}
-            data-testid="submit-btn"
+    <Layout>
+      <div className="min-h-screen">
+        {/* Top Bar */}
+        <div className="top-bar border-b border-[#E5E5E5]">
+          <button 
+            onClick={() => navigate('/dashboard')}
+            className="p-2 -ml-2 lg:hidden"
+            data-testid="back-btn"
           >
-            {submitting ? (
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              `Get Profile Analysis (2 credits)`
-            )}
+            <ArrowLeft size={24} strokeWidth={1.5} />
           </button>
+          <h1 className="text-xl lg:text-2xl" style={{ fontFamily: 'Georgia, serif' }}>
+            Profile Analysis
+          </h1>
+          <div className="w-10 lg:hidden" />
+        </div>
 
-          <p className="text-center text-xs text-[#666666] mt-4">
-            You have {user?.credits || 0} credits
-          </p>
-        </motion.div>
+        <div className="px-6 md:px-8 lg:px-12 py-6 md:py-8">
+          <div className="max-w-[1200px] mx-auto lg:mx-0">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <p className="text-[#666666] text-center lg:text-left mb-6 max-w-2xl">
+                Upload 4-6 photos plus your bio for a complete profile review.
+              </p>
+
+              <div className="two-col-layout">
+                {/* Left Column - Photos */}
+                <div className="col-left">
+                  {/* Drop Zone */}
+                  {photos.length < 6 && (
+                    <div
+                      className={`drop-zone mb-6 ${dragOver ? 'dragging' : ''}`}
+                      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                      onDragLeave={() => setDragOver(false)}
+                      onDrop={handleDrop}
+                      onClick={() => document.getElementById('file-input').click()}
+                      data-testid="drop-zone"
+                    >
+                      <input
+                        id="file-input"
+                        type="file"
+                        accept="image/jpeg,image/png"
+                        multiple
+                        onChange={(e) => handleFiles(e.target.files)}
+                        className="hidden"
+                      />
+                      {uploading ? (
+                        <div className="w-8 h-8 border-2 border-[#1A1A1A] border-t-transparent rounded-full animate-spin mx-auto" />
+                      ) : (
+                        <>
+                          <Upload size={32} className="mx-auto mb-3 text-[#666666]" strokeWidth={1.5} />
+                          <p className="text-[#1A1A1A] font-medium mb-1">Drop photos here</p>
+                          <p className="text-sm text-[#666666]">or tap to browse • JPG/PNG, max 10MB</p>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Photo Grid */}
+                  {photos.length > 0 && (
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+                      {photos.map((photo, index) => (
+                        <motion.div
+                          key={photo.photo_id}
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          className="relative"
+                        >
+                          <img
+                            src={photo.preview}
+                            alt={`Photo ${index + 1}`}
+                            className="aspect-[3/4] object-cover rounded-[16px] border border-[#E5E5E5] w-full"
+                          />
+                          <button
+                            onClick={() => removePhoto(index)}
+                            className="absolute top-2 right-2 w-7 h-7 bg-white rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                            data-testid={`remove-photo-${index}`}
+                          >
+                            <X size={14} />
+                          </button>
+                        </motion.div>
+                      ))}
+                    </div>
+                  )}
+
+                  <p className="text-center lg:text-left text-sm text-[#666666] mb-6">
+                    {photos.length}/6 photos • Need at least 4
+                  </p>
+                </div>
+
+                {/* Right Column - Bio & Prompts */}
+                <div className="col-right space-y-6">
+                  {/* Bio */}
+                  <div>
+                    <label className="text-sm text-[#666666] uppercase tracking-wider mb-2 block">
+                      Your Bio (optional)
+                    </label>
+                    <textarea
+                      value={bio}
+                      onChange={(e) => setBio(e.target.value)}
+                      placeholder="Paste your dating app bio here..."
+                      className="w-full p-4 rounded-[16px] bg-[#F7F7F5] border-none resize-none h-32 outline-none focus:ring-2 focus:ring-[#C9B8E8]"
+                      data-testid="bio-input"
+                    />
+                  </div>
+
+                  {/* Prompt Answer */}
+                  <div>
+                    <label className="text-sm text-[#666666] uppercase tracking-wider mb-2 block">
+                      Prompt Answer (optional)
+                    </label>
+                    <textarea
+                      value={promptAnswer}
+                      onChange={(e) => setPromptAnswer(e.target.value)}
+                      placeholder="Paste one of your prompt answers..."
+                      className="w-full p-4 rounded-[16px] bg-[#F7F7F5] border-none resize-none h-32 outline-none focus:ring-2 focus:ring-[#C9B8E8]"
+                      data-testid="prompt-input"
+                    />
+                  </div>
+
+                  {/* Submit Card */}
+                  <div className="card">
+                    <h3 className="text-lg mb-4" style={{ fontFamily: 'Georgia, serif' }}>
+                      Ready to submit?
+                    </h3>
+                    
+                    <div className="space-y-3 mb-4">
+                      <div className="flex justify-between text-sm">
+                        <span>Cost</span>
+                        <span className="font-medium">2 credits</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span>Your balance</span>
+                        <span className="font-medium">{user?.credits || 0} credits</span>
+                      </div>
+                    </div>
+
+                    {/* Submit Button */}
+                    <button
+                      onClick={handleSubmit}
+                      disabled={photos.length < 4 || submitting}
+                      className={`btn-pill w-full ${
+                        photos.length >= 4 ? 'btn-primary' : 'btn-secondary opacity-50'
+                      }`}
+                      data-testid="submit-btn"
+                    >
+                      {submitting ? (
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        `Get Profile Analysis`
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        </div>
       </div>
-    </div>
+    </Layout>
   );
 };
 

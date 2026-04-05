@@ -64,28 +64,34 @@ const Auth = () => {
   };
 
   return (
-    <div className="app-container">
-      {/* Top Bar */}
-      <div className="top-bar">
+    <div className="min-h-screen bg-[#FFFFFD] flex items-center justify-center px-6 py-12">
+      <div className="w-full max-w-[440px]">
+        {/* Back Button */}
         <button 
           onClick={() => navigate('/')}
-          className="p-2 -ml-2"
+          className="flex items-center gap-2 text-[#666666] hover:text-[#1A1A1A] mb-8"
           data-testid="back-btn"
         >
-          <ArrowLeft size={24} strokeWidth={1.5} />
+          <ArrowLeft size={20} strokeWidth={1.5} />
+          Back to home
         </button>
-        <h1 className="font-heading text-xl" style={{ fontFamily: 'Georgia, serif' }}>
-          MatchMe
-        </h1>
-        <div className="w-10" />
-      </div>
 
-      <div className="flex-1 px-6 py-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
+          className="card"
         >
+          <h1 
+            className="text-2xl md:text-3xl text-center mb-2"
+            style={{ fontFamily: 'Georgia, serif' }}
+          >
+            {isLogin ? 'Welcome back' : 'Create account'}
+          </h1>
+          <p className="text-[#666666] text-center mb-8">
+            {isLogin ? 'Sign in to continue' : 'Get started with 3 free credits'}
+          </p>
+
           {/* Toggle */}
           <div className="flex justify-center mb-8">
             <div className="toggle-group">

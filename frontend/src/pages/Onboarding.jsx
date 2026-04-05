@@ -74,22 +74,22 @@ const Onboarding = () => {
   const currentStep = steps[step];
 
   return (
-    <div className="app-container">
-      {/* Progress */}
-      <div className="px-6 pt-6">
-        <div className="flex gap-2">
-          {steps.map((_, index) => (
-            <div
-              key={index}
-              className={`flex-1 h-1 rounded-full transition-colors ${
-                index <= step ? 'bg-[#C9B8E8]' : 'bg-[#E5E5E5]'
-              }`}
-            />
-          ))}
+    <div className="min-h-screen bg-[#FFFFFD] flex items-center justify-center px-6 py-12">
+      <div className="w-full max-w-[500px]">
+        {/* Progress */}
+        <div className="mb-12">
+          <div className="flex gap-2">
+            {steps.map((_, index) => (
+              <div
+                key={index}
+                className={`flex-1 h-1.5 rounded-full transition-colors ${
+                  index <= step ? 'bg-[#C9B8E8]' : 'bg-[#E5E5E5]'
+                }`}
+              />
+            ))}
+          </div>
         </div>
-      </div>
 
-      <div className="flex-1 flex flex-col justify-center px-6 py-12">
         <AnimatePresence mode="wait">
           <motion.div
             key={step}
@@ -99,7 +99,7 @@ const Onboarding = () => {
             transition={{ duration: 0.3 }}
           >
             <h1 
-              className="font-heading text-3xl text-center mb-12"
+              className="text-3xl md:text-4xl text-center mb-10"
               style={{ fontFamily: 'Georgia, serif' }}
             >
               {currentStep.question}

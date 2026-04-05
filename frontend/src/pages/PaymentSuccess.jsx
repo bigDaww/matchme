@@ -55,16 +55,16 @@ const PaymentSuccess = () => {
   };
 
   return (
-    <div className="app-container flex items-center justify-center">
-      <div className="px-6 py-12 text-center max-w-sm">
+    <div className="min-h-screen bg-[#FFFFFD] flex items-center justify-center px-6 py-12">
+      <div className="text-center max-w-md">
         {status === 'loading' && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
           >
-            <Loader size={48} className="mx-auto mb-4 animate-spin text-[#C9B8E8]" />
+            <Loader size={64} className="mx-auto mb-6 animate-spin text-[#C9B8E8]" />
             <h2 
-              className="font-heading text-2xl mb-2"
+              className="text-2xl md:text-3xl mb-3"
               style={{ fontFamily: 'Georgia, serif' }}
             >
               Processing payment...
@@ -78,14 +78,14 @@ const PaymentSuccess = () => {
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
           >
-            <CheckCircle size={64} className="mx-auto mb-4 text-[#6B7E4A]" />
+            <CheckCircle size={80} className="mx-auto mb-6 text-[#6B7E4A]" />
             <h2 
-              className="font-heading text-2xl mb-2"
+              className="text-2xl md:text-3xl mb-3"
               style={{ fontFamily: 'Georgia, serif' }}
             >
               Payment successful!
             </h2>
-            <p className="text-[#666666] mb-6">
+            <p className="text-[#666666] mb-8">
               Your credits have been added to your account.
             </p>
             <button
@@ -103,14 +103,14 @@ const PaymentSuccess = () => {
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
           >
-            <XCircle size={64} className="mx-auto mb-4 text-[#E5533C]" />
+            <XCircle size={80} className="mx-auto mb-6 text-[#E5533C]" />
             <h2 
-              className="font-heading text-2xl mb-2"
+              className="text-2xl md:text-3xl mb-3"
               style={{ fontFamily: 'Georgia, serif' }}
             >
               {status === 'expired' ? 'Payment expired' : 'Payment failed'}
             </h2>
-            <p className="text-[#666666] mb-6">
+            <p className="text-[#666666] mb-8">
               {status === 'timeout' 
                 ? 'Payment verification timed out. Please check your email for confirmation.'
                 : 'Something went wrong. Please try again.'}

@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { ArrowLeft, Bell, Clock } from 'lucide-react';
 import axios from 'axios';
 import { API } from '../App';
+import Layout from '../components/Layout';
 
 const Waiting = () => {
   const navigate = useNavigate();
@@ -35,73 +36,77 @@ const Waiting = () => {
 
   if (loading) {
     return (
-      <div className="app-container flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-[#1A1A1A] border-t-transparent rounded-full animate-spin" />
-      </div>
+      <Layout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="w-8 h-8 border-2 border-[#1A1A1A] border-t-transparent rounded-full animate-spin" />
+        </div>
+      </Layout>
     );
   }
 
   const isPriority = job?.priority === 'paid';
 
   return (
-    <div className="app-container">
-      {/* Top Bar */}
-      <div className="top-bar border-b border-[#E5E5E5]">
-        <button onClick={() => navigate('/dashboard')} className="p-2 -ml-2" data-testid="back-btn">
-          <ArrowLeft size={24} strokeWidth={1.5} />
-        </button>
-        <h1 className="font-heading text-xl" style={{ fontFamily: 'Georgia, serif' }}>
-          Processing
-        </h1>
-        <div className="w-10" />
-      </div>
-
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 text-center">
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-          className="w-16 h-16 rounded-full border-4 border-[#E5E5E5] border-t-[#C9B8E8] mb-8"
-        />
-
-        <h2 
-          className="font-heading text-2xl mb-3"
-          style={{ fontFamily: 'Georgia, serif' }}
-        >
-          {job?.type === 'best-shot' ? 'Finding your best shot' : 'Analyzing your profile'}
-        </h2>
-
-        <p className="text-[#666666] mb-6">
-          Real people are reviewing your photos right now.
-        </p>
-
-        <div className="card w-full max-w-xs mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <Clock size={20} className={isPriority ? 'text-[#C9B8E8]' : 'text-[#666666]'} />
-            <span className="font-medium">
-              {isPriority ? 'Priority queue' : 'Standard queue'}
-            </span>
-          </div>
-          <p className="text-sm text-[#666666]">
-            {isPriority 
-              ? 'Results within 2 hours'
-              : 'Results within 24 hours'}
-          </p>
+    <Layout>
+      <div className="min-h-screen">
+        {/* Top Bar */}
+        <div className="top-bar border-b border-[#E5E5E5]">
+          <button onClick={() => navigate('/dashboard')} className="p-2 -ml-2 lg:hidden" data-testid="back-btn">
+            <ArrowLeft size={24} strokeWidth={1.5} />
+          </button>
+          <h1 className="text-xl lg:text-2xl" style={{ fontFamily: 'Georgia, serif' }}>
+            Processing
+          </h1>
+          <div className="w-10 lg:hidden" />
         </div>
 
-        <button
-          onClick={() => setNotifyEnabled(!notifyEnabled)}
-          className={`btn-pill ${notifyEnabled ? 'btn-accent' : 'btn-secondary'} gap-2`}
-          data-testid="notify-btn"
-        >
-          <Bell size={18} />
-          {notifyEnabled ? 'Notifications on' : 'Notify me when ready'}
-        </button>
+        <div className="flex-1 flex flex-col items-center justify-center px-6 py-16 md:py-24 text-center">
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+            className="w-20 h-20 rounded-full border-4 border-[#E5E5E5] border-t-[#C9B8E8] mb-8"
+          />
 
-        <p className="text-xs text-[#666666] mt-8">
-          Job ID: {jobId?.slice(0, 8)}...
-        </p>
+          <h2 
+            className="text-2xl md:text-3xl mb-4"
+            style={{ fontFamily: 'Georgia, serif' }}
+          >
+            {job?.type === 'best-shot' ? 'Finding your best shot' : 'Analyzing your profile'}
+          </h2>
+
+          <p className="text-[#666666] mb-8 max-w-md">
+            Real people are reviewing your photos right now.
+          </p>
+
+          <div className="card w-full max-w-sm mb-8">
+            <div className="flex items-center gap-3 mb-2">
+              <Clock size={20} className={isPriority ? 'text-[#C9B8E8]' : 'text-[#666666]'} />
+              <span className="font-medium">
+                {isPriority ? 'Priority queue' : 'Standard queue'}
+              </span>
+            </div>
+            <p className="text-sm text-[#666666]">
+              {isPriority 
+                ? 'Results within 2 hours'
+                : 'Results within 24 hours'}
+            </p>
+          </div>
+
+          <button
+            onClick={() => setNotifyEnabled(!notifyEnabled)}
+            className={`btn-pill ${notifyEnabled ? 'btn-accent' : 'btn-secondary'} gap-2`}
+            data-testid="notify-btn"
+          >
+            <Bell size={18} />
+            {notifyEnabled ? 'Notifications on' : 'Notify me when ready'}
+          </button>
+
+          <p className="text-xs text-[#666666] mt-8">
+            Job ID: {jobId?.slice(0, 8)}...
+          </p>
+        </div>
       </div>
-    </div>
+    </Layout>
   );
 };
 

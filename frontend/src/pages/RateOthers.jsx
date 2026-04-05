@@ -5,6 +5,7 @@ import { ArrowLeft, Flag, SkipForward } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { API } from '../App';
+import Layout from '../components/Layout';
 
 const RateOthers = () => {
   const navigate = useNavigate();
@@ -105,160 +106,174 @@ const RateOthers = () => {
 
   if (loading) {
     return (
-      <div className="app-container flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-[#1A1A1A] border-t-transparent rounded-full animate-spin" />
-      </div>
+      <Layout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="w-8 h-8 border-2 border-[#1A1A1A] border-t-transparent rounded-full animate-spin" />
+        </div>
+      </Layout>
     );
   }
 
   if (!photo) {
     return (
-      <div className="app-container">
-        <div className="top-bar border-b border-[#E5E5E5]">
-          <button onClick={() => navigate('/dashboard')} className="p-2 -ml-2" data-testid="back-btn">
-            <ArrowLeft size={24} strokeWidth={1.5} />
-          </button>
-          <h1 className="font-heading text-xl" style={{ fontFamily: 'Georgia, serif' }}>Rate Others</h1>
-          <div className="w-10" />
+      <Layout>
+        <div className="min-h-screen">
+          <div className="top-bar border-b border-[#E5E5E5]">
+            <button onClick={() => navigate('/dashboard')} className="p-2 -ml-2 lg:hidden" data-testid="back-btn">
+              <ArrowLeft size={24} strokeWidth={1.5} />
+            </button>
+            <h1 className="text-xl lg:text-2xl" style={{ fontFamily: 'Georgia, serif' }}>Rate Others</h1>
+            <div className="w-10 lg:hidden" />
+          </div>
+          <div className="flex-1 flex flex-col items-center justify-center px-6 py-20 text-center">
+            <p className="text-[#666666] mb-4 text-lg">No photos to rate right now.</p>
+            <p className="text-sm text-[#666666] mb-6 max-w-md">Check back later when more users submit their profiles for review.</p>
+            <button onClick={() => navigate('/dashboard')} className="btn-pill btn-primary">
+              Back to Dashboard
+            </button>
+          </div>
         </div>
-        <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-          <p className="text-[#666666] mb-4">No photos to rate right now.</p>
-          <p className="text-sm text-[#666666] mb-6">Check back later when more users submit their profiles for review.</p>
-          <button onClick={() => navigate('/dashboard')} className="btn-pill btn-primary">
-            Back to Dashboard
-          </button>
-        </div>
-      </div>
+      </Layout>
     );
   }
 
   return (
-    <div className="app-container">
-      {/* Top Bar */}
-      <div className="top-bar border-b border-[#E5E5E5]">
-        <button onClick={() => navigate('/dashboard')} className="p-2 -ml-2" data-testid="back-btn">
-          <ArrowLeft size={24} strokeWidth={1.5} />
-        </button>
-        <div className="flex items-center gap-2">
-          {[...Array(5)].map((_, i) => (
-            <div 
-              key={i}
-              className={`progress-dot ${i < (photo?.progress || 0) ? 'active' : ''}`}
-            />
-          ))}
-        </div>
-        <div className="badge badge-lilac text-xs">
-          5 = 1 credit
-        </div>
-      </div>
-
-      <div className="flex-1 px-6 py-4 overflow-y-auto pb-32">
-        {/* Photo */}
-        <motion.div
-          key={photo.photo_id}
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="mb-6"
-        >
-          <img
-            src={`${API}/files/${photo.storage_path}`}
-            alt="Profile to rate"
-            className="photo-tile mx-auto max-h-[350px] w-auto"
-            data-testid="rate-photo"
-          />
-        </motion.div>
-
-        {/* Sliders */}
-        <div className="space-y-6 mb-6">
-          {[
-            { key: 'confident', label: 'Confident' },
-            { key: 'approachable', label: 'Approachable' },
-            { key: 'attractive', label: 'Attractive' }
-          ].map(({ key, label }) => (
-            <div key={key}>
-              <div className="flex justify-between mb-2">
-                <span className="text-sm text-[#666666]">{label}</span>
-                <span className="text-sm font-medium">{ratings[key]}/5</span>
-              </div>
-              <input
-                type="range"
-                min="1"
-                max="5"
-                value={ratings[key]}
-                onChange={(e) => setRatings(prev => ({ ...prev, [key]: parseInt(e.target.value) }))}
-                className="w-full"
-                data-testid={`slider-${key}`}
+    <Layout>
+      <div className="min-h-screen pb-nav lg:pb-0">
+        {/* Top Bar */}
+        <div className="top-bar border-b border-[#E5E5E5]">
+          <button onClick={() => navigate('/dashboard')} className="p-2 -ml-2 lg:hidden" data-testid="back-btn">
+            <ArrowLeft size={24} strokeWidth={1.5} />
+          </button>
+          <div className="flex items-center gap-2">
+            {[...Array(5)].map((_, i) => (
+              <div 
+                key={i}
+                className={`progress-dot ${i < (photo?.progress || 0) ? 'active' : ''}`}
               />
-            </div>
-          ))}
-        </div>
-
-        {/* Tags */}
-        <div className="mb-6">
-          <p className="text-sm text-[#666666] mb-3">Quick feedback (optional)</p>
-          <div className="flex flex-wrap gap-2">
-            {tags.map(tag => (
-              <button
-                key={tag}
-                onClick={() => toggleTag(tag)}
-                className={`tag-chip ${selectedTags.includes(tag) ? 'selected' : ''}`}
-                data-testid={`tag-${tag.toLowerCase().replace(/\s/g, '-')}`}
-              >
-                {tag}
-              </button>
             ))}
+          </div>
+          <div className="badge badge-lilac text-xs">
+            5 = 1 credit
           </div>
         </div>
 
-        {/* Comment */}
-        <div className="mb-6">
-          <label className="text-sm text-[#666666] mb-2 block">
-            What would make this profile stronger? *
-          </label>
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="Be kind and constructive..."
-            className="w-full p-4 rounded-[12px] bg-[#F7F7F5] border-none resize-none h-24 outline-none focus:ring-2 focus:ring-[#C9B8E8]"
-            data-testid="comment-input"
-          />
-        </div>
-      </div>
+        <div className="px-6 md:px-8 lg:px-12 py-6">
+          <div className="max-w-[1200px] mx-auto lg:mx-0">
+            {/* Desktop: Photo on left, controls on right */}
+            <div className="rate-layout">
+              {/* Photo */}
+              <div className="rate-photo">
+                <motion.div
+                  key={photo.photo_id}
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                >
+                  <img
+                    src={`${API}/files/${photo.storage_path}`}
+                    alt="Profile to rate"
+                    className="photo-tile mx-auto lg:mx-0 max-h-[400px] lg:max-h-[500px] w-auto"
+                    data-testid="rate-photo"
+                  />
+                </motion.div>
+              </div>
 
-      {/* Bottom Actions */}
-      <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[430px] bg-[#FFFFFD] border-t border-[#E5E5E5] p-4">
-        <div className="flex gap-3">
-          <button
-            onClick={fetchNextPhoto}
-            className="flex-1 btn-pill btn-secondary flex items-center justify-center gap-2"
-            data-testid="skip-btn"
-          >
-            <SkipForward size={18} />
-            Skip
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || !comment.trim()}
-            className="flex-2 btn-pill btn-primary flex-[2]"
-            data-testid="submit-rating-btn"
-          >
-            {submitting ? (
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              'Submit Review'
-            )}
-          </button>
+              {/* Rating Controls */}
+              <div className="rate-controls space-y-6">
+                {/* Sliders */}
+                <div className="space-y-5">
+                  {[
+                    { key: 'confident', label: 'Confident' },
+                    { key: 'approachable', label: 'Approachable' },
+                    { key: 'attractive', label: 'Attractive' }
+                  ].map(({ key, label }) => (
+                    <div key={key}>
+                      <div className="flex justify-between mb-2">
+                        <span className="text-sm text-[#666666]">{label}</span>
+                        <span className="text-sm font-medium">{ratings[key]}/5</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="1"
+                        max="5"
+                        value={ratings[key]}
+                        onChange={(e) => setRatings(prev => ({ ...prev, [key]: parseInt(e.target.value) }))}
+                        className="w-full"
+                        data-testid={`slider-${key}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Tags */}
+                <div>
+                  <p className="text-sm text-[#666666] mb-3">Quick feedback (optional)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {tags.map(tag => (
+                      <button
+                        key={tag}
+                        onClick={() => toggleTag(tag)}
+                        className={`tag-chip ${selectedTags.includes(tag) ? 'selected' : ''}`}
+                        data-testid={`tag-${tag.toLowerCase().replace(/\s/g, '-')}`}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Comment */}
+                <div>
+                  <label className="text-sm text-[#666666] mb-2 block">
+                    What would make this profile stronger? *
+                  </label>
+                  <textarea
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    placeholder="Be kind and constructive..."
+                    className="w-full p-4 rounded-[16px] bg-[#F7F7F5] border-none resize-none h-24 outline-none focus:ring-2 focus:ring-[#C9B8E8]"
+                    data-testid="comment-input"
+                  />
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3">
+                  <button
+                    onClick={fetchNextPhoto}
+                    className="flex-1 btn-pill btn-secondary flex items-center justify-center gap-2"
+                    data-testid="skip-btn"
+                  >
+                    <SkipForward size={18} />
+                    Skip
+                  </button>
+                  <button
+                    onClick={handleSubmit}
+                    disabled={submitting || !comment.trim()}
+                    className="flex-[2] btn-pill btn-primary"
+                    data-testid="submit-rating-btn"
+                  >
+                    {submitting ? (
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      'Submit Review'
+                    )}
+                  </button>
+                </div>
+
+                <button
+                  onClick={handleReport}
+                  className="w-full text-center text-sm text-[#666666] hover:text-[#E5533C]"
+                  data-testid="report-btn"
+                >
+                  <Flag size={14} className="inline mr-1" />
+                  Report Photo
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-        <button
-          onClick={handleReport}
-          className="w-full text-center text-sm text-[#666666] mt-3 hover:text-[#E5533C]"
-          data-testid="report-btn"
-        >
-          <Flag size={14} className="inline mr-1" />
-          Report Photo
-        </button>
       </div>
-    </div>
+    </Layout>
   );
 };
 
