@@ -1,0 +1,97 @@
+{
+  "theme": "Light",
+  "archetype": "3 (Pastel & Soft) / Custom (User Defined)",
+  "design_philosophy": "Mobile-first, premium dating profile workshop. Extremely minimal, prioritizing the user's uploaded photos. The UI operates entirely within a max-width 430px container to mimic a native Hinge-like experience even on desktop. 90% monochrome with lilac accents. Lots of whitespace. Soft shadows, 16px rounded borders.",
+  "typography": {
+    "headings_font": "Georgia, serif",
+    "body_font": "Inter, sans-serif",
+    "hierarchy": {
+      "h1": "font-serif text-4xl tracking-tight leading-tight font-normal text-[#1A1A1A]",
+      "h2": "font-serif text-2xl tracking-tight leading-snug font-normal text-[#1A1A1A]",
+      "h3": "font-serif text-xl tracking-tight leading-snug font-normal text-[#1A1A1A]",
+      "body": "font-sans text-base leading-relaxed text-[#1A1A1A]/80",
+      "small": "font-sans text-sm leading-normal text-[#1A1A1A]/60",
+      "button": "font-sans text-base font-medium tracking-wide"
+    }
+  },
+  "colors": {
+    "background": "#FFFFFD",
+    "text_primary": "#1A1A1A",
+    "text_secondary": "#1A1A1A80", 
+    "accent_lilac": "#C9B8E8",
+    "border_soft": "#E5E5E5",
+    "surface": "#FFFFFF",
+    "error": "#FF4D4D",
+    "success": "#4CAF50"
+  },
+  "layout_and_spacing": {
+    "container": "max-w-[430px] mx-auto min-h-[100dvh] bg-[#FFFFFD] relative sm:shadow-[0_0_40px_rgba(0,0,0,0.04)] sm:border-x sm:border-[#E5E5E5] overflow-x-hidden flex flex-col",
+    "section_padding": "px-6 py-8",
+    "card_spacing": "gap-4",
+    "shadows": {
+      "soft": "shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
+    },
+    "border_radius": {
+      "pill": "rounded-[50px]",
+      "card": "rounded-[16px]",
+      "photo": "rounded-[16px]"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "w-full bg-[#1A1A1A] text-[#FFFFFD] rounded-[50px] py-4 px-8 flex items-center justify-center transition-transform hover:scale-[0.98] active:scale-[0.95] font-sans data-[testid='primary-btn']",
+      "secondary": "w-full bg-[#FFFFFD] border border-[#E5E5E5] text-[#1A1A1A] rounded-[50px] py-4 px-8 flex items-center justify-center transition-transform hover:bg-[#F9F9F9] font-sans data-[testid='secondary-btn']",
+      "accent": "w-full bg-[#C9B8E8] text-[#1A1A1A] rounded-[50px] py-4 px-8 flex items-center justify-center transition-transform hover:scale-[0.98] font-sans data-[testid='accent-btn']"
+    },
+    "cards": {
+      "base": "bg-[#FFFFFF] border border-[#E5E5E5] rounded-[16px] p-6 shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
+    },
+    "inputs": {
+      "base": "w-full bg-transparent border-b border-[#E5E5E5] py-3 text-lg focus:outline-none focus:border-[#C9B8E8] transition-colors placeholder:text-[#1A1A1A]/30 font-sans"
+    },
+    "photos": {
+      "grid": "grid grid-cols-2 gap-3",
+      "portrait": "aspect-[3/4] object-cover rounded-[16px] border border-[#E5E5E5] w-full shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
+    },
+    "navigation": {
+      "bottom_bar": "fixed bottom-0 w-full max-w-[430px] bg-[#FFFFFD]/90 backdrop-blur-xl border-t border-[#E5E5E5] pb-safe pt-2 px-6 flex justify-between items-center z-50",
+      "top_bar": "w-full flex items-center justify-between px-6 py-4 bg-[#FFFFFD] sticky top-0 z-40"
+    }
+  },
+  "motion_and_interactions": {
+    "hover_states": "Subtle scale down (0.98) on buttons to mimic native touch feedback.",
+    "page_transitions": "Slide up or fade in to mimic mobile navigation. Use framer-motion if possible.",
+    "photo_upload": "Scale up slightly on drag over, pulsing lilac border."
+  },
+  "icons_and_assets": {
+    "library": "lucide-react",
+    "usage": "Use thin, minimalist icons (strokeWidth={1.5}). Black (#1A1A1A) or gray for inactive states."
+  },
+  "media": {
+    "hero_image": {
+      "url": "https://images.unsplash.com/photo-1620342242548-f49a774555a4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTN8MHwxfHNlYXJjaHwzfHxhdHRyYWN0aXZlJTIwcGVyc29uJTIwc21pbGluZyUyMGNhbmRpZCUyMHBvcnRyYWl0JTIwb3V0ZG9vcnxlbnwwfHx8fDE3NzU0MjQxMDB8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Attractive woman smiling outdoor candid portrait, to be used in landing page hero.",
+      "category": "hero"
+    },
+    "profile_example_1": {
+      "url": "https://images.unsplash.com/photo-1581368039520-576f51440580?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NjZ8MHwxfHNlYXJjaHwxfHxjYW5kaWQlMjBsaWZlc3R5bGUlMjBwb3J0cmFpdCUyMG1hbiUyMHNtaWxpbmclMjBjb2ZmZWUlMjBzaG9wfGVufDB8fHx8MTc3NTQyNDEwMHww&ixlib=rb-4.1.0&q=85",
+      "description": "Candid lifestyle portrait of a man, used as an example profile photo in the Best Shot flow.",
+      "category": "example_profile"
+    },
+    "profile_example_2": {
+      "url": "https://images.unsplash.com/photo-1724460331356-93cd6c8a5eee?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwyfHxkYXRpbmclMjBhcHAlMjBwcm9maWxlJTIwcGhvdG8lMjBjYW5kaWR8ZW58MHx8fHwxNzc1NDI0MTAwfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Woman holding cell phone, used for rate others page or dating app examples.",
+      "category": "example_profile"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Install 'lucide-react' and 'framer-motion'.",
+    "Configure tailwind.config.js to include Georgia ('font-serif') and Inter ('font-sans'). Update the theme colors strictly to the ones specified in the JSON (#FFFFFD, #1A1A1A, #C9B8E8).",
+    "The ENTIRE layout must be wrapped in a div with classes: 'max-w-[430px] mx-auto min-h-[100dvh] bg-[#FFFFFD] relative sm:border-x sm:border-[#E5E5E5] sm:shadow-[0_0_40px_rgba(0,0,0,0.04)]'. Do not build a standard widescreen web app.",
+    "Do not use generic shadcn forms with large labels and padding. Make the forms mimic mobile native inputs (e.g., border-b only, large text, or minimalist floating labels).",
+    "All buttons must use 'rounded-[50px]'. No sharp corners for buttons.",
+    "For the photo grid, enforce an 'aspect-[3/4]' ratio so the pictures look like dating app cards.",
+    "Add 'data-testid' to every interactive element.",
+    "Do not build a sidebar dashboard. Use a bottom navigation bar or simple top-left back buttons to navigate, exactly like a mobile app."
+  ]
+}
