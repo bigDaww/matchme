@@ -179,7 +179,7 @@ const Dashboard = () => {
                         Rate Others
                       </h3>
                       <p className="text-sm text-[#666666]">
-                        {dashboard?.stats?.ratings_today ?? 0}/5 today • Rate 5 = 1 credit
+                        {dashboard?.stats?.ratings_today ?? 0} today • Rate 2 = 1 credit
                       </p>
                     </div>
                     <ChevronRight size={20} className="text-[#E5E5E5]" />

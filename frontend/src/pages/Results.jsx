@@ -101,7 +101,7 @@ const Results = () => {
                   >
                     <div className="relative">
                       <img
-                        src={photos[winner.photo_id]?.preview || `${API}/files/${photos[winner.photo_id]?.storage_path}`}
+                        src={photos[winner.photo_id]?.url || photos[winner.photo_id]?.preview}
                         alt="Best photo"
                         className="photo-tile mx-auto lg:mx-0 max-w-[350px] ring-4 ring-[#C9B8E8]"
                         onError={(e) => { e.target.src = 'https://via.placeholder.com/300x400?text=Photo'; }}
@@ -146,7 +146,7 @@ const Results = () => {
                       {ranked.slice(1).map((photo, index) => (
                         <div key={photo.photo_id} className="flex-shrink-0 relative">
                           <img
-                            src={photos[photo.photo_id]?.preview || `${API}/files/${photos[photo.photo_id]?.storage_path}`}
+                            src={photos[photo.photo_id]?.url || photos[photo.photo_id]?.preview}
                             alt={`Ranked ${index + 2}`}
                             className="w-24 h-32 object-cover rounded-[12px] border border-[#E5E5E5]"
                             onError={(e) => { e.target.src = 'https://via.placeholder.com/96x128?text=Photo'; }}

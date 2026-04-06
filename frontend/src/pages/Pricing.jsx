@@ -38,7 +38,7 @@ const Pricing = () => {
       features: [
         '3 credits on signup',
         '1 Best Shot review',
-        'Rate 5 photos = 1 credit',
+        'Rate 2 photos = 1 credit',
         'Max 5 earned credits/day',
         'Results in 24 hours'
       ],

@@ -13,7 +13,12 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
-import requests
+import time
+import asyncio
+import cloudinary
+import cloudinary.uploader
+import cloudinary.utils
+import resend
 from bson import ObjectId
 from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutSessionRequest
 
@@ -35,11 +40,21 @@ db = client[os.environ['DB_NAME']]
 JWT_ALGORITHM = "HS256"
 JWT_SECRET = os.environ.get('JWT_SECRET')
 
-# Object Storage Configuration
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
-APP_NAME = "matchme"
-storage_key = None
+# Cloudinary Configuration
+cloudinary.config(
+    cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.environ.get("CLOUDINARY_API_KEY"),
+    api_secret=os.environ.get("CLOUDINARY_API_SECRET"),
+    secure=True
+)
+
+# Resend Configuration
+resend.api_key = os.environ.get("RESEND_API_KEY")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "noreply@matchme.app")
+
+# Credit system configuration
+RATINGS_FOR_CREDIT = 2  # Rate 2 photos = 1 credit (changed from 5)
+MAX_DAILY_EARNED_CREDITS = 5
 
 # Create the main app
 app = FastAPI(title="MatchMe API")
@@ -106,34 +121,64 @@ async def get_optional_user(request: Request) -> Optional[dict]:
     except HTTPException:
         return None
 
-# ==================== OBJECT STORAGE ====================
-def init_storage():
-    global storage_key
-    if storage_key:
-        return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    storage_key = resp.json()["storage_key"]
-    return storage_key
+# ==================== EMAIL SERVICE (RESEND) ====================
+async def send_email(to_email: str, subject: str, html_content: str):
+    """Send email using Resend API"""
+    try:
+        params = {
+            "from": SENDER_EMAIL,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_content
+        }
+        email = await asyncio.to_thread(resend.Emails.send, params)
+        logger.info(f"Email sent to {to_email}: {email.get('id')}")
+        return email
+    except Exception as e:
+        logger.error(f"Failed to send email to {to_email}: {str(e)}")
+        return None
 
-def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=120
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-def get_object(path: str) -> tuple:
-    key = init_storage()
-    resp = requests.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key}, timeout=60
-    )
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+async def send_job_complete_email(user_email: str, user_name: str, job_type: str, job_id: str):
+    """Send notification when job is complete"""
+    frontend_url = os.environ.get("FRONTEND_URL", "https://matchme-preview.preview.emergentagent.com")
+    results_url = f"{frontend_url}/results/{job_id}"
+    
+    subject = f"Your {job_type.replace('-', ' ').title()} Results Are Ready!"
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: 'Inter', Arial, sans-serif; line-height: 1.6; color: #1A1A1A; }}
+            .container {{ max-width: 500px; margin: 0 auto; padding: 40px 20px; }}
+            .header {{ text-align: center; margin-bottom: 30px; }}
+            .header h1 {{ font-family: Georgia, serif; font-size: 28px; margin: 0; }}
+            .content {{ background: #F7F7F5; border-radius: 16px; padding: 30px; margin-bottom: 30px; }}
+            .btn {{ display: inline-block; background: #1A1A1A; color: white; padding: 16px 32px; border-radius: 50px; text-decoration: none; font-weight: 500; }}
+            .footer {{ text-align: center; color: #666666; font-size: 14px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>MatchMe</h1>
+            </div>
+            <div class="content">
+                <p>Hi {user_name},</p>
+                <p>Great news! Your <strong>{job_type.replace('-', ' ')}</strong> results are ready.</p>
+                <p>Real people have reviewed your photos and we've compiled their feedback to help you get more matches.</p>
+                <p style="text-align: center; margin: 30px 0;">
+                    <a href="{results_url}" class="btn">View Your Results</a>
+                </p>
+            </div>
+            <div class="footer">
+                <p>© 2026 MatchMe. Get more matches.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    await send_email(user_email, subject, html_content)
 
 # ==================== PYDANTIC MODELS ====================
 class UserRegister(BaseModel):
@@ -164,7 +209,7 @@ class OnboardingData(BaseModel):
 class PhotoResponse(BaseModel):
     photo_id: str
     url: str
-    storage_path: str
+    public_id: str
     created_at: str
 
 class JobCreate(BaseModel):
@@ -310,7 +355,7 @@ async def google_session(request: Request, response: Response):
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id required")
     
-    # REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    import requests
     auth_response = requests.get(
         "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
         headers={"X-Session-ID": session_id},
@@ -347,7 +392,6 @@ async def google_session(request: Request, response: Response):
         user = user_doc
     else:
         user_id = user["user_id"]
-        # Update google info
         await db.users.update_one(
             {"user_id": user_id},
             {"$set": {"google_id": data.get("id"), "picture": data.get("picture")}}
@@ -378,9 +422,39 @@ async def complete_onboarding(data: OnboardingData, request: Request):
     )
     return {"message": "Onboarding completed"}
 
-# ==================== FILE UPLOAD ====================
+# ==================== CLOUDINARY UPLOAD ====================
+@api_router.get("/cloudinary/signature")
+async def get_cloudinary_signature(request: Request, folder: str = "matchme/uploads"):
+    """Generate signed upload params for Cloudinary"""
+    user = await get_current_user(request)
+    
+    # Ensure folder is within allowed paths
+    allowed_prefix = f"matchme/users/{user['user_id']}"
+    if not folder.startswith("matchme/"):
+        folder = f"matchme/users/{user['user_id']}/photos"
+    
+    timestamp = int(time.time())
+    params = {
+        "timestamp": timestamp,
+        "folder": folder,
+    }
+    
+    signature = cloudinary.utils.api_sign_request(
+        params,
+        os.environ.get("CLOUDINARY_API_SECRET")
+    )
+    
+    return {
+        "signature": signature,
+        "timestamp": timestamp,
+        "cloud_name": os.environ.get("CLOUDINARY_CLOUD_NAME"),
+        "api_key": os.environ.get("CLOUDINARY_API_KEY"),
+        "folder": folder
+    }
+
 @api_router.post("/upload")
 async def upload_file(request: Request, file: UploadFile = File(...)):
+    """Direct upload to Cloudinary from backend"""
     user = await get_current_user(request)
     
     # Validate file type
@@ -393,19 +467,32 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 10MB)")
     
-    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
     photo_id = str(uuid.uuid4())
-    path = f"{APP_NAME}/uploads/{user['user_id']}/{photo_id}.{ext}"
+    folder = f"matchme/users/{user['user_id']}/photos"
     
-    result = put_object(path, data, file.content_type or "image/jpeg")
+    # Upload to Cloudinary
+    try:
+        result = await asyncio.to_thread(
+            cloudinary.uploader.upload,
+            data,
+            folder=folder,
+            public_id=photo_id,
+            resource_type="image"
+        )
+    except Exception as e:
+        logger.error(f"Cloudinary upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload image")
     
     photo_doc = {
         "photo_id": photo_id,
         "user_id": user["user_id"],
-        "storage_path": result["path"],
+        "public_id": result["public_id"],
+        "url": result["secure_url"],
         "original_filename": file.filename,
         "content_type": file.content_type,
-        "size": result.get("size", len(data)),
+        "width": result.get("width"),
+        "height": result.get("height"),
+        "size": result.get("bytes"),
         "is_deleted": False,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -413,31 +500,40 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     
     return {
         "photo_id": photo_id,
-        "storage_path": result["path"],
+        "url": result["secure_url"],
+        "public_id": result["public_id"],
         "created_at": photo_doc["created_at"]
     }
 
-@api_router.get("/files/{path:path}")
-async def download_file(path: str, request: Request, auth: str = Query(None)):
-    # Check auth
+@api_router.delete("/photos/{photo_id}")
+async def delete_photo(photo_id: str, request: Request):
+    """Delete photo from Cloudinary and database"""
+    user = await get_current_user(request)
+    
+    photo = await db.photos.find_one(
+        {"photo_id": photo_id, "user_id": user["user_id"]},
+        {"_id": 0}
+    )
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    
+    # Delete from Cloudinary
     try:
-        if auth:
-            payload = jwt.decode(auth, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
-            if payload.get("type") != "access":
-                raise HTTPException(status_code=401, detail="Invalid token")
-        else:
-            await get_current_user(request)
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        await asyncio.to_thread(
+            cloudinary.uploader.destroy,
+            photo["public_id"],
+            invalidate=True
+        )
+    except Exception as e:
+        logger.error(f"Cloudinary delete failed: {e}")
     
-    record = await db.photos.find_one({"storage_path": path, "is_deleted": False}, {"_id": 0})
-    if not record:
-        raise HTTPException(status_code=404, detail="File not found")
+    # Soft delete in database
+    await db.photos.update_one(
+        {"photo_id": photo_id},
+        {"$set": {"is_deleted": True}}
+    )
     
-    data, content_type = get_object(path)
-    return Response(content=data, media_type=record.get("content_type", content_type))
+    return {"message": "Photo deleted"}
 
 @api_router.get("/user/photos")
 async def get_user_photos(request: Request):
@@ -541,25 +637,18 @@ async def get_user_jobs(request: Request):
 async def get_next_photo_to_rate(request: Request):
     user = await get_current_user(request)
     
-    # Check daily limit
+    # Check daily limit (max 10 ratings/day = 5 credits with new system)
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     today_ratings = await db.ratings.count_documents({
         "rater_id": user["user_id"],
         "created_at": {"$gte": today_start.isoformat()}
     })
     
-    if today_ratings >= 25:  # Max 5 credits/day * 5 ratings each
+    if today_ratings >= MAX_DAILY_EARNED_CREDITS * RATINGS_FOR_CREDIT:  # Max 10 ratings/day
         raise HTTPException(status_code=400, detail="Daily rating limit reached")
     
     # Find photo to rate (gender matched)
     user_orientation = user.get("orientation", "everyone")
-    
-    # Build query for gender matching
-    gender_filter = {}
-    if user_orientation == "men":
-        gender_filter = {"user_gender": "man"}
-    elif user_orientation == "women":
-        gender_filter = {"user_gender": "woman"}
     
     # Find photos from queued jobs that user hasn't rated yet
     rated_photo_ids = await db.ratings.distinct("photo_id", {"rater_id": user["user_id"]})
@@ -567,7 +656,7 @@ async def get_next_photo_to_rate(request: Request):
     # Get a queued job's photo
     pipeline = [
         {"$match": {"status": "queued"}},
-        {"$sort": {"priority": -1, "created_at": 1}},  # Priority jobs first
+        {"$sort": {"priority": -1, "created_at": 1}},
         {"$limit": 10}
     ]
     jobs = await db.jobs.aggregate(pipeline).to_list(10)
@@ -593,10 +682,10 @@ async def get_next_photo_to_rate(request: Request):
                 if photo:
                     return {
                         "photo_id": photo_id,
-                        "storage_path": photo["storage_path"],
+                        "url": photo.get("url"),
                         "job_id": job["job_id"],
                         "ratings_today": today_ratings,
-                        "progress": today_ratings % 5
+                        "progress": today_ratings % RATINGS_FOR_CREDIT
                     }
     
     raise HTTPException(status_code=404, detail="No photos to rate right now")
@@ -634,12 +723,12 @@ async def submit_rating(data: RatingSubmit, request: Request):
         {"$inc": {"ratings_given": 1}}
     )
     
-    # Check if user earns a credit (every 5 ratings)
+    # Check if user earns a credit (every 2 ratings now, changed from 5)
     updated_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
     ratings_given = updated_user.get("ratings_given", 0)
     
     earned_credit = False
-    if ratings_given % 5 == 0:
+    if ratings_given % RATINGS_FOR_CREDIT == 0:
         # Check daily earning limit (max 5 credits/day)
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         credits_earned_today = await db.credit_earnings.count_documents({
@@ -647,7 +736,7 @@ async def submit_rating(data: RatingSubmit, request: Request):
             "created_at": {"$gte": today_start.isoformat()}
         })
         
-        if credits_earned_today < 5:
+        if credits_earned_today < MAX_DAILY_EARNED_CREDITS:
             await db.users.update_one(
                 {"user_id": user["user_id"]},
                 {"$inc": {"credits": 1}}
@@ -660,7 +749,7 @@ async def submit_rating(data: RatingSubmit, request: Request):
             })
             earned_credit = True
     
-    # Check if job has enough ratings to complete (simulate with 3+ ratings)
+    # Update photo owner's ratings earned
     photo = await db.photos.find_one({"photo_id": data.photo_id}, {"_id": 0})
     if photo:
         photo_owner = photo.get("user_id")
@@ -672,7 +761,7 @@ async def submit_rating(data: RatingSubmit, request: Request):
     return {
         "message": "Rating submitted",
         "earned_credit": earned_credit,
-        "ratings_until_credit": 5 - (ratings_given % 5) if not earned_credit else 5
+        "ratings_until_credit": RATINGS_FOR_CREDIT - (ratings_given % RATINGS_FOR_CREDIT) if not earned_credit else RATINGS_FOR_CREDIT
     }
 
 @api_router.post("/rate/report")
@@ -721,7 +810,8 @@ async def get_dashboard(request: Request):
         "stats": {
             "ratings_today": today_ratings,
             "credits_earned_today": credits_earned_today,
-            "can_earn_more": credits_earned_today < 5
+            "can_earn_more": credits_earned_today < MAX_DAILY_EARNED_CREDITS,
+            "ratings_for_credit": RATINGS_FOR_CREDIT
         }
     }
 
@@ -884,10 +974,10 @@ async def stripe_webhook(request: Request):
         logger.error(f"Webhook error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-# ==================== PROCESS JOBS (Background task simulation) ====================
+# ==================== PROCESS JOBS ====================
 @api_router.post("/jobs/{job_id}/process")
 async def process_job(job_id: str, request: Request):
-    """Admin endpoint to simulate job processing"""
+    """Admin endpoint to process a job and send email notification"""
     job = await db.jobs.find_one({"job_id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -928,8 +1018,15 @@ async def process_job(job_id: str, request: Request):
         }}
     )
     
-    # Send mock email notification
-    logger.info(f"[MOCKED EMAIL] Job {job_id} completed for user {job['user_id']}")
+    # Send email notification
+    job_user = await db.users.find_one({"user_id": job["user_id"]}, {"_id": 0})
+    if job_user:
+        await send_job_complete_email(
+            user_email=job_user.get("email"),
+            user_name=job_user.get("name", "there"),
+            job_type=job["type"],
+            job_id=job_id
+        )
     
     return result
 
@@ -945,11 +1042,11 @@ async def health():
 # Include the router in the main app
 app.include_router(api_router)
 
-# CORS
+# CORS - allow all origins for now
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=[os.environ.get('FRONTEND_URL', 'http://localhost:3000')],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -957,54 +1054,58 @@ app.add_middleware(
 # ==================== STARTUP ====================
 @app.on_event("startup")
 async def startup():
-    # Create indexes
-    await db.users.create_index("email", unique=True)
-    await db.users.create_index("user_id", unique=True)
-    await db.photos.create_index("user_id")
-    await db.photos.create_index("photo_id", unique=True)
-    await db.jobs.create_index("user_id")
-    await db.jobs.create_index("job_id", unique=True)
-    await db.ratings.create_index([("rater_id", 1), ("photo_id", 1)], unique=True)
-    await db.login_attempts.create_index("identifier")
-    
-    # Initialize storage
     try:
-        init_storage()
-        logger.info("Storage initialized")
+        # Test MongoDB connection
+        await db.command("ping")
+        logger.info("Connected to MongoDB Atlas")
+        
+        # Create indexes
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("user_id", unique=True)
+        await db.photos.create_index("user_id")
+        await db.photos.create_index("photo_id", unique=True)
+        await db.jobs.create_index("user_id")
+        await db.jobs.create_index("job_id", unique=True)
+        await db.ratings.create_index([("rater_id", 1), ("photo_id", 1)], unique=True)
+        await db.login_attempts.create_index("identifier")
+        
+        # Seed admin user
+        admin_email = os.environ.get("ADMIN_EMAIL", "admin@matchme.com")
+        admin_password = os.environ.get("ADMIN_PASSWORD", "AdminMatch2024!")
+        existing = await db.users.find_one({"email": admin_email}, {"_id": 0})
+        
+        if existing is None:
+            admin_id = f"user_{uuid.uuid4().hex[:12]}"
+            hashed = hash_password(admin_password)
+            await db.users.insert_one({
+                "user_id": admin_id,
+                "email": admin_email,
+                "name": "Admin",
+                "password_hash": hashed,
+                "credits": 999,
+                "gender": None,
+                "orientation": None,
+                "dating_app": None,
+                "tier": "pro",
+                "ratings_given": 0,
+                "ratings_earned": 0,
+                "onboarding_completed": True,
+                "role": "admin",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+            logger.info(f"Admin user created: {admin_email}")
+        elif not verify_password(admin_password, existing.get("password_hash", "")):
+            await db.users.update_one(
+                {"email": admin_email},
+                {"$set": {"password_hash": hash_password(admin_password)}}
+            )
+            logger.info("Admin password updated")
     except Exception as e:
-        logger.error(f"Storage init failed: {e}")
+        logger.error(f"MongoDB connection failed: {e}")
+        logger.info("Server will continue with local MongoDB fallback")
     
-    # Seed admin user
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@matchme.com")
-    admin_password = os.environ.get("ADMIN_PASSWORD", "AdminMatch2024!")
-    existing = await db.users.find_one({"email": admin_email}, {"_id": 0})
-    
-    if existing is None:
-        admin_id = f"user_{uuid.uuid4().hex[:12]}"
-        hashed = hash_password(admin_password)
-        await db.users.insert_one({
-            "user_id": admin_id,
-            "email": admin_email,
-            "name": "Admin",
-            "password_hash": hashed,
-            "credits": 999,
-            "gender": None,
-            "orientation": None,
-            "dating_app": None,
-            "tier": "pro",
-            "ratings_given": 0,
-            "ratings_earned": 0,
-            "onboarding_completed": True,
-            "role": "admin",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        })
-        logger.info(f"Admin user created: {admin_email}")
-    elif not verify_password(admin_password, existing.get("password_hash", "")):
-        await db.users.update_one(
-            {"email": admin_email},
-            {"$set": {"password_hash": hash_password(admin_password)}}
-        )
-        logger.info("Admin password updated")
+    logger.info("Cloudinary configured")
+    logger.info("Resend email configured")
     
     # Write test credentials
     os.makedirs("/app/memory", exist_ok=True)
@@ -1012,13 +1113,23 @@ async def startup():
         f.write(f"""# Test Credentials
 
 ## Admin Account
-- Email: {admin_email}
-- Password: {admin_password}
+- Email: admin@matchme.com
+- Password: AdminMatch2024!
 - Role: admin
 
 ## Test User
 - Register with any email to create a test user
 - Default credits: 3
+
+## Credit System (Updated)
+- Rate {RATINGS_FOR_CREDIT} photos = 1 credit
+- Max {MAX_DAILY_EARNED_CREDITS} earned credits/day
+
+## Services Connected
+- MongoDB Atlas: Configured (check logs for status)
+- Cloudinary: Connected
+- Stripe: Live keys
+- Resend: Connected
 
 ## Auth Endpoints
 - POST /api/auth/register

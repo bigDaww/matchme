@@ -154,7 +154,7 @@ const RateOthers = () => {
             ))}
           </div>
           <div className="badge badge-lilac text-xs">
-            5 = 1 credit
+            2 = 1 credit
           </div>
         </div>
 
@@ -170,7 +170,7 @@ const RateOthers = () => {
                   animate={{ opacity: 1, scale: 1 }}
                 >
                   <img
-                    src={`${API}/files/${photo.storage_path}`}
+                    src={photo.url}
                     alt="Profile to rate"
                     className="photo-tile mx-auto lg:mx-0 max-h-[400px] lg:max-h-[500px] w-auto"
                     data-testid="rate-photo"
