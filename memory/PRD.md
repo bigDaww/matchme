@@ -13,7 +13,7 @@ Build a web app called MatchMe — a premium dating profile optimizer. Users upl
 - Human rating system for photos (Confident/Approachable/Attractive)
 - Best Shot analysis (find best first photo, 3-10 photos)
 - Profile Analysis (complete profile feedback, 4-6 photos + bio + prompt)
-- Credit-based economy (Free/Priority tiers)
+- Credit-based economy (Free/Priority tiers) — always integer values
 - Stripe subscriptions (Priority $9/mo, Pro $25/mo)
 - JWT auth + Google OAuth
 - Hinge-style mobile-first responsive UI
@@ -36,6 +36,14 @@ Build a web app called MatchMe — a premium dating profile optimizer. Users upl
 | Credit Earning | 5 ratings = 1 credit | N/A | N/A |
 | Max Daily Credits | 5 | N/A | N/A |
 
+## Credit System (Integer-Only)
+- Credits are ALWAYS whole integers — never stored or displayed as floats
+- `ratings_since_last_credit` counter (0-4) tracks progress toward next credit
+- Every 5 ratings: counter resets to 0, +1 credit
+- `job_bonus_count` counter (0-4) tracks job completion bonuses
+- Every 5 job completions where user was a rater: counter resets to 0, +1 credit
+- Frontend uses Math.floor() on all credit displays as safety net
+
 ## Credit Costs
 - Best Shot: 1 credit
 - Profile Analysis: 2 credits
@@ -43,11 +51,8 @@ Build a web app called MatchMe — a premium dating profile optimizer. Users upl
 ## Background Job Worker
 - Runs every 15 minutes via asyncio scheduler
 - Weighted score formula: (confident * 0.4) + (approachable * 0.35) + (attractive * 0.25)
+- Includes individual ratings with rater_username in results
 - Processes jobs when: min_ratings met OR time_cap exceeded
-- Low confidence: processed with fewer ratings after time cap
-- Extension: one extension per job before failing
-- Failed jobs: refund 1 credit (Free/Priority), no refund (Pro)
-- Awards 0.2 credits to raters on job completion (non-Pro only)
 
 ## What's Been Implemented (Apr 2026)
 
@@ -55,45 +60,25 @@ Build a web app called MatchMe — a premium dating profile optimizer. Users upl
 - [x] FastAPI with MongoDB Atlas (SSL/TLS)
 - [x] JWT authentication + Google OAuth
 - [x] Cloudinary photo upload/delete
-- [x] Credit system (3 free on signup, earn by rating)
+- [x] Integer-only credit system with counter-based earning
 - [x] Job queue (Best Shot, Profile Analysis)
 - [x] Rating system with gender matching
 - [x] Stripe subscription checkout + webhooks
 - [x] Background job worker (15-min cron)
 - [x] Tier-based processing logic (Free/Priority/Pro)
-- [x] Email notifications via Resend (results ready, job failed)
+- [x] Email notifications via Resend
+- [x] Results include individual ratings with rater usernames
 - [x] Admin user seeding + manual worker trigger
-- [x] Empty comment validation on rate/submit
-- [x] Brute force login protection
 
 ### Frontend
 - [x] Landing page with hero
-- [x] Auth (login/signup + Google OAuth)
-- [x] Onboarding (3 questions)
-- [x] Dashboard with credits/tier display (no notification toggles)
-- [x] Best Shot upload flow (tier-specific delivery time)
-- [x] Profile Analysis upload flow (Pro-aware credit display)
-- [x] Rate Others interface (Pro users see community help)
-- [x] Waiting/Processing page (tier info, extension indicator)
-- [x] Results page (ranked photos, comments, tags)
-- [x] Pricing page (3 tiers: Free/Priority/Pro)
-- [x] Payment success page
-- [x] Privacy & Terms pages
+- [x] Auth (login/signup + Google OAuth) — fixed input padding
+- [x] Dashboard with integer credit display
+- [x] Results page with reviewer usernames, individual scores, and comments
 - [x] Full responsive layout (Mobile/Tablet/Desktop)
-
-## Tech Stack
-- Frontend: React + Tailwind CSS + Shadcn UI
-- Backend: Python/FastAPI
-- Database: MongoDB Atlas
-- Storage: Cloudinary
-- Payments: Stripe (subscriptions + webhooks)
-- Email: Resend
-- Auth: JWT + Google OAuth (Emergent)
+- [x] All pages: Pricing, BestShot, ProfileAnalysis, RateOthers, Waiting, etc.
 
 ## Prioritized Backlog
-### P0 (Critical)
-- None currently
-
 ### P1 (High Priority)
 - [ ] Photo content moderation/filtering
 
@@ -103,17 +88,3 @@ Build a web app called MatchMe — a premium dating profile optimizer. Users upl
 - [ ] Profile preview mode
 - [ ] Download results as PDF
 - [ ] Share results
-
-## API Endpoints
-- POST /api/auth/register, /api/auth/login, /api/auth/logout, /api/auth/refresh
-- POST /api/auth/google/session
-- POST /api/user/onboarding
-- GET /api/auth/me, /api/user/dashboard, /api/user/photos
-- POST /api/upload, DELETE /api/photos/{photo_id}
-- POST /api/jobs/best-shot, /api/jobs/profile-analysis
-- GET /api/jobs, /api/jobs/{job_id}
-- GET /api/rate/next, POST /api/rate/submit, POST /api/rate/report
-- POST /api/payments/subscribe, GET /api/payments/status/{session_id}
-- POST /api/payments/cancel-subscription
-- POST /api/webhook/stripe
-- POST /api/admin/run-worker
