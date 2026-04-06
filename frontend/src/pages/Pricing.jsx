@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Check, Star, Zap, Crown } from 'lucide-react';
@@ -9,15 +9,22 @@ import { useAuth, API } from '../App';
 const Pricing = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [loading, setLoading] = useState(null);
 
-  const handlePurchase = async (packageId) => {
+  const handleSubscribe = async (packageId) => {
     if (!user) {
       navigate('/auth');
       return;
     }
 
+    if (packageId === 'free') {
+      toast.info('You are already on the Free plan');
+      return;
+    }
+
+    setLoading(packageId);
     try {
-      const response = await axios.post(`${API}/payments/checkout`, {
+      const response = await axios.post(`${API}/payments/subscribe`, {
         package_id: packageId,
         origin_url: window.location.origin
       }, { withCredentials: true });
@@ -25,6 +32,7 @@ const Pricing = () => {
       window.location.href = response.data.url;
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to start checkout');
+      setLoading(null);
     }
   };
 
@@ -36,48 +44,46 @@ const Pricing = () => {
       period: 'forever',
       icon: Star,
       features: [
-        '3 credits on signup',
-        '1 Best Shot review',
-        'Rate 2 photos = 1 credit',
-        'Max 5 earned credits/day',
-        'Results in 24 hours'
+        '3 free credits on signup',
+        'Earn credits by rating others',
+        'Results within 24 hours',
+        'Reviewed by 3 real people'
       ],
-      cta: 'Current Plan',
-      disabled: true,
+      cta: user ? 'Current Plan' : 'Get Started',
+      disabled: !!user,
       highlight: false
     },
     {
-      id: 'priority_pass',
-      name: 'Priority Pass',
+      id: 'priority',
+      name: 'Priority',
       price: '$9',
-      period: 'one-time',
+      period: '/month',
       icon: Zap,
       features: [
-        '5 bonus credits',
-        'Priority queue',
-        'Results in 2 hours',
-        'No subscription',
-        'Use anytime'
+        '12 credits per month',
+        'Results in 2–4 hours',
+        'Reviewed by 7 real people',
+        'Priority queue always on'
       ],
-      cta: 'Get Priority Pass',
-      disabled: false,
+      cta: user?.tier === 'priority' ? 'Current Plan' : 'Subscribe',
+      disabled: user?.tier === 'priority',
       highlight: true
     },
     {
-      id: 'pro_monthly',
+      id: 'pro',
       name: 'Pro',
-      price: '$19',
+      price: '$25',
       period: '/month',
       icon: Crown,
       features: [
-        'Unlimited Best Shots',
-        '4 Profile Analyses/month',
-        'Always priority queue',
-        'Results in 2 hours',
-        'Cancel anytime'
+        'Unlimited uploads per day',
+        'No credit system',
+        'Results in 2–4 hours',
+        'Reviewed by 10+ real people',
+        'Best for serious daters'
       ],
-      cta: 'Go Pro',
-      disabled: false,
+      cta: user?.tier === 'pro' ? 'Current Plan' : 'Go Pro',
+      disabled: user?.tier === 'pro',
       highlight: false
     }
   ];
@@ -155,16 +161,20 @@ const Pricing = () => {
                   </ul>
 
                   <button
-                    onClick={() => !plan.disabled && handlePurchase(plan.id)}
-                    disabled={plan.disabled || (user?.tier === 'pro' && plan.id === 'pro_monthly')}
+                    onClick={() => !plan.disabled && handleSubscribe(plan.id)}
+                    disabled={plan.disabled || loading === plan.id}
                     className={`btn-pill w-full ${
-                      plan.disabled || (user?.tier === 'pro' && plan.id === 'pro_monthly')
+                      plan.disabled
                         ? 'btn-secondary opacity-50 cursor-not-allowed'
                         : plan.highlight ? 'btn-primary' : 'btn-secondary'
                     }`}
                     data-testid={`buy-${plan.id}`}
                   >
-                    {user?.tier === 'pro' && plan.id === 'pro_monthly' ? 'Current Plan' : plan.cta}
+                    {loading === plan.id ? (
+                      <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      plan.cta
+                    )}
                   </button>
                 </div>
               </motion.div>
@@ -172,7 +182,7 @@ const Pricing = () => {
           </div>
 
           <p className="text-center text-sm text-[#666666] mt-10">
-            Secure payment powered by Stripe
+            Secure payment powered by Stripe. Cancel anytime.
           </p>
         </div>
       </div>

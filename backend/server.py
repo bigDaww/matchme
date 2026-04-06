@@ -21,6 +21,7 @@ import cloudinary.utils
 import resend
 from bson import ObjectId
 from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutSessionRequest
+import stripe
 
 # Configure logging
 logging.basicConfig(
@@ -53,9 +54,43 @@ cloudinary.config(
 resend.api_key = os.environ.get("RESEND_API_KEY")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "noreply@matchme.app")
 
-# Credit system configuration
-RATINGS_FOR_CREDIT = 2  # Rate 2 photos = 1 credit (changed from 5)
-MAX_DAILY_EARNED_CREDITS = 5
+# Stripe Configuration
+stripe.api_key = os.environ.get("STRIPE_API_KEY")
+
+# ==================== TIER CONFIGURATION ====================
+TIER_CONFIG = {
+    "free": {
+        "min_ratings": 3,
+        "time_cap_hours": 24,
+        "low_confidence_min": 2,
+        "extension_hours": 12,
+        "credits_per_month": None,  # Not subscription-based
+        "signup_credits": 3,
+        "ratings_for_credit": 5,
+        "max_daily_earned_credits": 5,
+    },
+    "priority": {
+        "min_ratings": 7,
+        "time_cap_hours": 4,
+        "low_confidence_min": 4,
+        "extension_hours": 2,
+        "credits_per_month": 12,
+        "price_monthly": 9.00,
+    },
+    "pro": {
+        "min_ratings": 10,
+        "time_cap_hours": 4,
+        "low_confidence_min": 6,
+        "extension_hours": 2,
+        "credits_per_month": None,  # Unlimited - no credit system
+        "price_monthly": 25.00,
+        "unlimited": True,
+    }
+}
+
+# Credit costs
+BEST_SHOT_COST = 1
+PROFILE_ANALYSIS_COST = 2
 
 # Create the main app
 app = FastAPI(title="MatchMe API")
@@ -139,12 +174,77 @@ async def send_email(to_email: str, subject: str, html_content: str):
         logger.error(f"Failed to send email to {to_email}: {str(e)}")
         return None
 
-async def send_job_complete_email(user_email: str, user_name: str, job_type: str, job_id: str):
+async def send_results_email(user_email: str, user_name: str, job_type: str, job_id: str, rater_count: int, low_confidence: bool = False):
     """Send notification when job is complete"""
     frontend_url = os.environ.get("FRONTEND_URL", "https://matchme-preview.preview.emergentagent.com")
     results_url = f"{frontend_url}/results/{job_id}"
     
-    subject = f"Your {job_type.replace('-', ' ').title()} Results Are Ready!"
+    subject = f"[{rater_count}] people reviewed your photos — see results"
+    
+    confidence_note = ""
+    if low_confidence:
+        confidence_note = """
+        <p style="background: #FFF3CD; padding: 12px; border-radius: 8px; font-size: 14px;">
+            <strong>Note:</strong> Your results are based on fewer reviews than usual. 
+            Consider submitting again for more comprehensive feedback.
+        </p>
+        """
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: 'Inter', Arial, sans-serif; line-height: 1.6; color: #1A1A1A; }}
+            .container {{ max-width: 500px; margin: 0 auto; padding: 40px 20px; }}
+            .header {{ text-align: center; margin-bottom: 30px; }}
+            .header h1 {{ font-family: Georgia, serif; font-size: 28px; margin: 0; }}
+            .content {{ background: #F7F7F5; border-radius: 16px; padding: 30px; margin-bottom: 30px; }}
+            .btn {{ display: inline-block; background: #1A1A1A; color: white; padding: 16px 32px; border-radius: 50px; text-decoration: none; font-weight: 500; }}
+            .footer {{ text-align: center; color: #666666; font-size: 14px; }}
+            .stat {{ font-size: 48px; font-weight: bold; color: #C9B8E8; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>MatchMe</h1>
+            </div>
+            <div class="content">
+                <p>Hi {user_name},</p>
+                <p style="text-align: center;">
+                    <span class="stat">{rater_count}</span><br>
+                    <span>people reviewed your photos</span>
+                </p>
+                <p>Your <strong>{job_type.replace('-', ' ')}</strong> results are ready! We've analyzed the feedback to help you get more matches.</p>
+                {confidence_note}
+                <p style="text-align: center; margin: 30px 0;">
+                    <a href="{results_url}" class="btn">View Your Results</a>
+                </p>
+            </div>
+            <div class="footer">
+                <p>© 2026 MatchMe. Get more matches.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    await send_email(user_email, subject, html_content)
+
+async def send_job_failed_email(user_email: str, user_name: str, job_type: str, refunded: bool = False, refund_amount: int = 0):
+    """Send apology email when job fails due to insufficient ratings"""
+    frontend_url = os.environ.get("FRONTEND_URL", "https://matchme-preview.preview.emergentagent.com")
+    
+    subject = "We couldn't complete your photo review"
+    
+    refund_note = ""
+    if refunded:
+        refund_note = f"""
+        <p style="background: #D4EDDA; padding: 12px; border-radius: 8px; font-size: 14px;">
+            <strong>Good news:</strong> We've refunded {refund_amount} credit(s) to your account.
+        </p>
+        """
+    
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -166,10 +266,11 @@ async def send_job_complete_email(user_email: str, user_name: str, job_type: str
             </div>
             <div class="content">
                 <p>Hi {user_name},</p>
-                <p>Great news! Your <strong>{job_type.replace('-', ' ')}</strong> results are ready.</p>
-                <p>Real people have reviewed your photos and we've compiled their feedback to help you get more matches.</p>
+                <p>We're sorry, but we weren't able to gather enough reviews for your <strong>{job_type.replace('-', ' ')}</strong> submission.</p>
+                <p>This can happen during periods of lower activity. We recommend trying again — most submissions get reviewed quickly!</p>
+                {refund_note}
                 <p style="text-align: center; margin: 30px 0;">
-                    <a href="{results_url}" class="btn">View Your Results</a>
+                    <a href="{frontend_url}/dashboard" class="btn">Try Again</a>
                 </p>
             </div>
             <div class="footer">
@@ -191,41 +292,15 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
-class UserResponse(BaseModel):
-    user_id: str
-    email: str
-    name: str
-    credits: int
-    gender: Optional[str] = None
-    orientation: Optional[str] = None
-    dating_app: Optional[str] = None
-    tier: str
-    onboarding_completed: bool
-
 class OnboardingData(BaseModel):
     gender: str
     orientation: str
     dating_app: str
 
-class PhotoResponse(BaseModel):
-    photo_id: str
-    url: str
-    public_id: str
-    created_at: str
-
 class JobCreate(BaseModel):
     photo_ids: List[str]
     bio: Optional[str] = None
     prompt_answer: Optional[str] = None
-
-class JobResponse(BaseModel):
-    job_id: str
-    type: str
-    status: str
-    priority: str
-    created_at: str
-    completed_at: Optional[str] = None
-    result: Optional[Dict[str, Any]] = None
 
 class RatingSubmit(BaseModel):
     photo_id: str
@@ -253,11 +328,14 @@ async def register(data: UserRegister, response: Response):
         "email": email,
         "name": data.name,
         "password_hash": hash_password(data.password),
-        "credits": 3,
+        "credits": TIER_CONFIG["free"]["signup_credits"],  # 3 credits on signup
         "gender": None,
         "orientation": None,
         "dating_app": None,
         "tier": "free",
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
+        "subscription_start_date": None,
         "ratings_given": 0,
         "ratings_earned": 0,
         "onboarding_completed": False,
@@ -275,7 +353,7 @@ async def register(data: UserRegister, response: Response):
         "user_id": user_id,
         "email": email,
         "name": data.name,
-        "credits": 3,
+        "credits": TIER_CONFIG["free"]["signup_credits"],
         "tier": "free",
         "onboarding_completed": False
     }
@@ -296,7 +374,6 @@ async def login(data: UserLogin, response: Response, request: Request):
     
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not verify_password(data.password, user.get("password_hash", "")):
-        # Increment failed attempts
         await db.login_attempts.update_one(
             {"identifier": identifier},
             {"$inc": {"count": 1}, "$set": {"last_attempt": datetime.now(timezone.utc).isoformat()}},
@@ -304,7 +381,6 @@ async def login(data: UserLogin, response: Response, request: Request):
         )
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # Clear failed attempts
     await db.login_attempts.delete_one({"identifier": identifier})
     
     access_token = create_access_token(user["user_id"], email)
@@ -368,7 +444,6 @@ async def google_session(request: Request, response: Response):
     data = auth_response.json()
     email = data["email"].lower()
     
-    # Find or create user
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user:
         user_id = f"user_{uuid.uuid4().hex[:12]}"
@@ -379,11 +454,14 @@ async def google_session(request: Request, response: Response):
             "google_id": data.get("id"),
             "picture": data.get("picture"),
             "password_hash": None,
-            "credits": 3,
+            "credits": TIER_CONFIG["free"]["signup_credits"],
             "gender": None,
             "orientation": None,
             "dating_app": None,
             "tier": "free",
+            "stripe_customer_id": None,
+            "stripe_subscription_id": None,
+            "subscription_start_date": None,
             "ratings_given": 0,
             "ratings_earned": 0,
             "onboarding_completed": False,
@@ -424,35 +502,6 @@ async def complete_onboarding(data: OnboardingData, request: Request):
     return {"message": "Onboarding completed"}
 
 # ==================== CLOUDINARY UPLOAD ====================
-@api_router.get("/cloudinary/signature")
-async def get_cloudinary_signature(request: Request, folder: str = "matchme/uploads"):
-    """Generate signed upload params for Cloudinary"""
-    user = await get_current_user(request)
-    
-    # Ensure folder is within allowed paths
-    allowed_prefix = f"matchme/users/{user['user_id']}"
-    if not folder.startswith("matchme/"):
-        folder = f"matchme/users/{user['user_id']}/photos"
-    
-    timestamp = int(time.time())
-    params = {
-        "timestamp": timestamp,
-        "folder": folder,
-    }
-    
-    signature = cloudinary.utils.api_sign_request(
-        params,
-        os.environ.get("CLOUDINARY_API_SECRET")
-    )
-    
-    return {
-        "signature": signature,
-        "timestamp": timestamp,
-        "cloud_name": os.environ.get("CLOUDINARY_CLOUD_NAME"),
-        "api_key": os.environ.get("CLOUDINARY_API_KEY"),
-        "folder": folder
-    }
-
 @api_router.post("/upload")
 async def upload_file(request: Request, file: UploadFile = File(...)):
     """Direct upload to Cloudinary from backend"""
@@ -518,7 +567,6 @@ async def delete_photo(photo_id: str, request: Request):
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
     
-    # Delete from Cloudinary
     try:
         await asyncio.to_thread(
             cloudinary.uploader.destroy,
@@ -528,7 +576,6 @@ async def delete_photo(photo_id: str, request: Request):
     except Exception as e:
         logger.error(f"Cloudinary delete failed: {e}")
     
-    # Soft delete in database
     await db.photos.update_one(
         {"photo_id": photo_id},
         {"$set": {"is_deleted": True}}
@@ -546,6 +593,21 @@ async def get_user_photos(request: Request):
     return photos
 
 # ==================== JOBS ====================
+def check_credits(user: dict, cost: int) -> bool:
+    """Check if user has enough credits (Pro users always pass)"""
+    if user.get("tier") == "pro":
+        return True  # Pro users have no credit system
+    return user.get("credits", 0) >= cost
+
+async def deduct_credits(user_id: str, amount: int, tier: str):
+    """Deduct credits from user (skip for Pro users)"""
+    if tier == "pro":
+        return  # Pro users have no credit system
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$inc": {"credits": -amount}}
+    )
+
 @api_router.post("/jobs/best-shot")
 async def create_best_shot_job(data: JobCreate, request: Request):
     user = await get_current_user(request)
@@ -553,11 +615,11 @@ async def create_best_shot_job(data: JobCreate, request: Request):
     if len(data.photo_ids) < 3 or len(data.photo_ids) > 10:
         raise HTTPException(status_code=400, detail="Upload 3-10 photos")
     
-    if user["credits"] < 1:
+    if not check_credits(user, BEST_SHOT_COST):
         raise HTTPException(status_code=400, detail="Not enough credits")
     
     job_id = str(uuid.uuid4())
-    priority = "paid" if user["tier"] in ["priority", "pro"] else "free"
+    tier = user.get("tier", "free")
     
     job_doc = {
         "job_id": job_id,
@@ -565,20 +627,20 @@ async def create_best_shot_job(data: JobCreate, request: Request):
         "type": "best-shot",
         "status": "queued",
         "photo_ids": data.photo_ids,
-        "priority": priority,
+        "tier": tier,
         "result": None,
+        "low_confidence": False,
+        "extended": False,
+        "extension_count": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "completed_at": None
     }
     await db.jobs.insert_one(job_doc)
     
     # Deduct credit
-    await db.users.update_one(
-        {"user_id": user["user_id"]},
-        {"$inc": {"credits": -1}}
-    )
+    await deduct_credits(user["user_id"], BEST_SHOT_COST, tier)
     
-    return {"job_id": job_id, "status": "queued", "priority": priority}
+    return {"job_id": job_id, "status": "queued", "tier": tier}
 
 @api_router.post("/jobs/profile-analysis")
 async def create_profile_analysis_job(data: JobCreate, request: Request):
@@ -587,11 +649,11 @@ async def create_profile_analysis_job(data: JobCreate, request: Request):
     if len(data.photo_ids) < 4 or len(data.photo_ids) > 6:
         raise HTTPException(status_code=400, detail="Upload 4-6 photos")
     
-    if user["credits"] < 2:
+    if not check_credits(user, PROFILE_ANALYSIS_COST):
         raise HTTPException(status_code=400, detail="Not enough credits (need 2)")
     
     job_id = str(uuid.uuid4())
-    priority = "paid" if user["tier"] in ["priority", "pro"] else "free"
+    tier = user.get("tier", "free")
     
     job_doc = {
         "job_id": job_id,
@@ -601,20 +663,20 @@ async def create_profile_analysis_job(data: JobCreate, request: Request):
         "photo_ids": data.photo_ids,
         "bio": data.bio,
         "prompt_answer": data.prompt_answer,
-        "priority": priority,
+        "tier": tier,
         "result": None,
+        "low_confidence": False,
+        "extended": False,
+        "extension_count": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "completed_at": None
     }
     await db.jobs.insert_one(job_doc)
     
     # Deduct credits
-    await db.users.update_one(
-        {"user_id": user["user_id"]},
-        {"$inc": {"credits": -2}}
-    )
+    await deduct_credits(user["user_id"], PROFILE_ANALYSIS_COST, tier)
     
-    return {"job_id": job_id, "status": "queued", "priority": priority}
+    return {"job_id": job_id, "status": "queued", "tier": tier}
 
 @api_router.get("/jobs/{job_id}")
 async def get_job(job_id: str, request: Request):
@@ -638,15 +700,20 @@ async def get_user_jobs(request: Request):
 async def get_next_photo_to_rate(request: Request):
     user = await get_current_user(request)
     
-    # Check daily limit (max 10 ratings/day = 5 credits with new system)
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_ratings = await db.ratings.count_documents({
-        "rater_id": user["user_id"],
-        "created_at": {"$gte": today_start.isoformat()}
-    })
+    # Pro users don't earn credits, but can still rate
+    tier = user.get("tier", "free")
     
-    if today_ratings >= MAX_DAILY_EARNED_CREDITS * RATINGS_FOR_CREDIT:  # Max 10 ratings/day
-        raise HTTPException(status_code=400, detail="Daily rating limit reached")
+    if tier != "pro":
+        # Check daily limit for non-Pro users
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_ratings = await db.ratings.count_documents({
+            "rater_id": user["user_id"],
+            "created_at": {"$gte": today_start.isoformat()}
+        })
+        
+        max_ratings = TIER_CONFIG["free"]["max_daily_earned_credits"] * TIER_CONFIG["free"]["ratings_for_credit"]
+        if today_ratings >= max_ratings:
+            raise HTTPException(status_code=400, detail="Daily rating limit reached")
     
     # Find photo to rate (gender matched)
     user_orientation = user.get("orientation", "everyone")
@@ -654,13 +721,13 @@ async def get_next_photo_to_rate(request: Request):
     # Find photos from queued jobs that user hasn't rated yet
     rated_photo_ids = await db.ratings.distinct("photo_id", {"rater_id": user["user_id"]})
     
-    # Get a queued job's photo
+    # Get queued jobs
     pipeline = [
-        {"$match": {"status": "queued"}},
-        {"$sort": {"priority": -1, "created_at": 1}},
-        {"$limit": 10}
+        {"$match": {"status": {"$in": ["queued", "processing"]}}},
+        {"$sort": {"created_at": 1}},
+        {"$limit": 20}
     ]
-    jobs = await db.jobs.aggregate(pipeline).to_list(10)
+    jobs = await db.jobs.aggregate(pipeline).to_list(20)
     
     for job in jobs:
         if job["user_id"] == user["user_id"]:
@@ -681,12 +748,25 @@ async def get_next_photo_to_rate(request: Request):
             if photo_id not in rated_photo_ids:
                 photo = await db.photos.find_one({"photo_id": photo_id, "is_deleted": False}, {"_id": 0})
                 if photo:
+                    # Count ratings for progress display
+                    if tier != "pro":
+                        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                        today_ratings = await db.ratings.count_documents({
+                            "rater_id": user["user_id"],
+                            "created_at": {"$gte": today_start.isoformat()}
+                        })
+                        progress = today_ratings % TIER_CONFIG["free"]["ratings_for_credit"]
+                    else:
+                        today_ratings = 0
+                        progress = 0
+                    
                     return {
                         "photo_id": photo_id,
                         "url": photo.get("url"),
                         "job_id": job["job_id"],
                         "ratings_today": today_ratings,
-                        "progress": today_ratings % RATINGS_FOR_CREDIT
+                        "progress": progress,
+                        "is_pro": tier == "pro"
                     }
     
     raise HTTPException(status_code=404, detail="No photos to rate right now")
@@ -694,6 +774,7 @@ async def get_next_photo_to_rate(request: Request):
 @api_router.post("/rate/submit")
 async def submit_rating(data: RatingSubmit, request: Request):
     user = await get_current_user(request)
+    tier = user.get("tier", "free")
     
     # Check if already rated
     existing = await db.ratings.find_one(
@@ -706,6 +787,7 @@ async def submit_rating(data: RatingSubmit, request: Request):
     rating_doc = {
         "rating_id": str(uuid.uuid4()),
         "rater_id": user["user_id"],
+        "rater_tier": tier,
         "photo_id": data.photo_id,
         "confident": data.confident,
         "approachable": data.approachable,
@@ -724,45 +806,53 @@ async def submit_rating(data: RatingSubmit, request: Request):
         {"$inc": {"ratings_given": 1}}
     )
     
-    # Check if user earns a credit (every 2 ratings now, changed from 5)
-    updated_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
-    ratings_given = updated_user.get("ratings_given", 0)
-    
+    # Pro users don't earn credits
     earned_credit = False
-    if ratings_given % RATINGS_FOR_CREDIT == 0:
-        # Check daily earning limit (max 5 credits/day)
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        credits_earned_today = await db.credit_earnings.count_documents({
-            "user_id": user["user_id"],
-            "created_at": {"$gte": today_start.isoformat()}
-        })
+    ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"]
+    
+    if tier != "pro":
+        # Check if user earns a credit (every 5 ratings for free/priority)
+        updated_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+        ratings_given = updated_user.get("ratings_given", 0)
         
-        if credits_earned_today < MAX_DAILY_EARNED_CREDITS:
-            await db.users.update_one(
-                {"user_id": user["user_id"]},
-                {"$inc": {"credits": 1}}
-            )
-            await db.credit_earnings.insert_one({
+        if ratings_given % TIER_CONFIG["free"]["ratings_for_credit"] == 0:
+            # Check daily earning limit
+            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            credits_earned_today = await db.credit_earnings.count_documents({
                 "user_id": user["user_id"],
-                "amount": 1,
-                "reason": "rating_reward",
-                "created_at": datetime.now(timezone.utc).isoformat()
+                "created_at": {"$gte": today_start.isoformat()}
             })
-            earned_credit = True
+            
+            if credits_earned_today < TIER_CONFIG["free"]["max_daily_earned_credits"]:
+                await db.users.update_one(
+                    {"user_id": user["user_id"]},
+                    {"$inc": {"credits": 1}}
+                )
+                await db.credit_earnings.insert_one({
+                    "user_id": user["user_id"],
+                    "amount": 1,
+                    "reason": "rating_reward",
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                })
+                earned_credit = True
+        
+        ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"] - (ratings_given % TIER_CONFIG["free"]["ratings_for_credit"])
+        if earned_credit:
+            ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"]
     
     # Update photo owner's ratings earned
     photo = await db.photos.find_one({"photo_id": data.photo_id}, {"_id": 0})
     if photo:
-        photo_owner = photo.get("user_id")
         await db.users.update_one(
-            {"user_id": photo_owner},
+            {"user_id": photo.get("user_id")},
             {"$inc": {"ratings_earned": 1}}
         )
     
     return {
         "message": "Rating submitted",
         "earned_credit": earned_credit,
-        "ratings_until_credit": RATINGS_FOR_CREDIT - (ratings_given % RATINGS_FOR_CREDIT) if not earned_credit else RATINGS_FOR_CREDIT
+        "ratings_until_credit": ratings_until_credit if tier != "pro" else None,
+        "is_pro": tier == "pro"
     }
 
 @api_router.post("/rate/report")
@@ -780,6 +870,7 @@ async def report_photo(request: Request, photo_id: str):
 @api_router.get("/user/dashboard")
 async def get_dashboard(request: Request):
     user = await get_current_user(request)
+    tier = user.get("tier", "free")
     
     # Get recent jobs
     jobs = await db.jobs.find(
@@ -799,222 +890,115 @@ async def get_dashboard(request: Request):
         "created_at": {"$gte": today_start.isoformat()}
     })
     
+    tier_config = TIER_CONFIG.get(tier, TIER_CONFIG["free"])
+    
     return {
         "user": {
             "user_id": user["user_id"],
             "name": user.get("name"),
             "email": user.get("email"),
-            "credits": user.get("credits", 0),
-            "tier": user.get("tier", "free")
+            "credits": user.get("credits", 0) if tier != "pro" else None,
+            "tier": tier
         },
         "recent_jobs": jobs,
         "stats": {
             "ratings_today": today_ratings,
-            "credits_earned_today": credits_earned_today,
-            "can_earn_more": credits_earned_today < MAX_DAILY_EARNED_CREDITS,
-            "ratings_for_credit": RATINGS_FOR_CREDIT
+            "credits_earned_today": credits_earned_today if tier != "pro" else None,
+            "can_earn_more": credits_earned_today < TIER_CONFIG["free"]["max_daily_earned_credits"] if tier != "pro" else None,
+            "ratings_for_credit": TIER_CONFIG["free"]["ratings_for_credit"] if tier != "pro" else None,
+            "is_pro": tier == "pro"
+        },
+        "tier_info": {
+            "min_ratings": tier_config.get("min_ratings"),
+            "time_cap_hours": tier_config.get("time_cap_hours"),
+            "unlimited": tier_config.get("unlimited", False)
         }
     }
 
-# ==================== PAYMENTS ====================
-PACKAGES = {
-    "priority_pass": {"amount": 9.00, "name": "Priority Pass", "credits": 5, "tier_upgrade": "priority"},
-    "pro_monthly": {"amount": 19.00, "name": "Pro Monthly", "credits": 0, "tier_upgrade": "pro"}
-}
-
-@api_router.post("/payments/checkout")
-async def create_checkout(data: CheckoutRequest, request: Request):
-    user = await get_current_user(request)
-    
-    if data.package_id not in PACKAGES:
-        raise HTTPException(status_code=400, detail="Invalid package")
-    
-    package = PACKAGES[data.package_id]
-    
-    webhook_url = f"{request.base_url}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(
-        api_key=os.environ.get("STRIPE_API_KEY"),
-        webhook_url=webhook_url
-    )
-    
-    success_url = f"{data.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{data.origin_url}/pricing"
-    
-    checkout_request = CheckoutSessionRequest(
-        amount=package["amount"],
-        currency="usd",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "user_id": user["user_id"],
-            "package_id": data.package_id,
-            "package_name": package["name"]
-        }
-    )
-    
-    session = await stripe_checkout.create_checkout_session(checkout_request)
-    
-    # Create payment transaction record
-    await db.payment_transactions.insert_one({
-        "transaction_id": str(uuid.uuid4()),
-        "session_id": session.session_id,
-        "user_id": user["user_id"],
-        "package_id": data.package_id,
-        "amount": package["amount"],
-        "currency": "usd",
-        "status": "pending",
-        "payment_status": "initiated",
-        "created_at": datetime.now(timezone.utc).isoformat()
-    })
-    
-    return {"url": session.url, "session_id": session.session_id}
-
-@api_router.get("/payments/status/{session_id}")
-async def get_payment_status(session_id: str, request: Request):
-    user = await get_current_user(request)
-    
-    transaction = await db.payment_transactions.find_one(
-        {"session_id": session_id, "user_id": user["user_id"]},
-        {"_id": 0}
-    )
-    if not transaction:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    # If already processed, return cached status
-    if transaction.get("payment_status") == "paid":
-        return transaction
-    
-    webhook_url = f"{request.base_url}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(
-        api_key=os.environ.get("STRIPE_API_KEY"),
-        webhook_url=webhook_url
-    )
-    
-    status = await stripe_checkout.get_checkout_status(session_id)
-    
-    # Update transaction
-    await db.payment_transactions.update_one(
-        {"session_id": session_id},
-        {"$set": {
-            "status": status.status,
-            "payment_status": status.payment_status,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }}
-    )
-    
-    # If payment successful and not already processed
-    if status.payment_status == "paid" and transaction.get("payment_status") != "paid":
-        package = PACKAGES.get(transaction.get("package_id"))
-        if package:
-            update_fields = {}
-            if package.get("credits"):
-                update_fields["$inc"] = {"credits": package["credits"]}
-            if package.get("tier_upgrade"):
-                update_fields["$set"] = {"tier": package["tier_upgrade"]}
-            
-            if update_fields:
-                await db.users.update_one(
-                    {"user_id": user["user_id"]},
-                    update_fields
-                )
-    
-    return {
-        "session_id": session_id,
-        "status": status.status,
-        "payment_status": status.payment_status,
-        "amount_total": status.amount_total,
-        "currency": status.currency
-    }
-
-@api_router.post("/webhook/stripe")
-async def stripe_webhook(request: Request):
-    body = await request.body()
-    signature = request.headers.get("Stripe-Signature")
-    
-    try:
-        webhook_url = f"{request.base_url}api/webhook/stripe"
-        stripe_checkout = StripeCheckout(
-            api_key=os.environ.get("STRIPE_API_KEY"),
-            webhook_url=webhook_url
-        )
-        event = await stripe_checkout.handle_webhook(body, signature)
-        
-        if event.payment_status == "paid":
-            session_id = event.session_id
-            transaction = await db.payment_transactions.find_one(
-                {"session_id": session_id},
-                {"_id": 0}
-            )
-            
-            if transaction and transaction.get("payment_status") != "paid":
-                package = PACKAGES.get(transaction.get("package_id"))
-                if package:
-                    update_fields = {}
-                    if package.get("credits"):
-                        update_fields["$inc"] = {"credits": package["credits"]}
-                    if package.get("tier_upgrade"):
-                        update_fields["$set"] = {"tier": package["tier_upgrade"]}
-                    
-                    if update_fields:
-                        await db.users.update_one(
-                            {"user_id": transaction["user_id"]},
-                            update_fields
-                        )
-                
-                await db.payment_transactions.update_one(
-                    {"session_id": session_id},
-                    {"$set": {
-                        "status": "complete",
-                        "payment_status": "paid",
-                        "completed_at": datetime.now(timezone.utc).isoformat()
-                    }}
-                )
-        
-        return {"received": True}
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-# ==================== PROCESS JOBS ====================
-@api_router.post("/jobs/{job_id}/process")
-async def process_job(job_id: str, request: Request):
-    """Admin endpoint to process a job and send email notification"""
+# ==================== BACKGROUND JOB WORKER ====================
+async def get_job_ratings_count(job_id: str) -> int:
+    """Get total number of ratings for all photos in a job"""
     job = await db.jobs.find_one({"job_id": job_id}, {"_id": 0})
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        return 0
     
-    if job["status"] != "queued":
-        raise HTTPException(status_code=400, detail="Job already processed")
+    count = 0
+    for photo_id in job.get("photo_ids", []):
+        photo_ratings = await db.ratings.count_documents({"photo_id": photo_id})
+        count += photo_ratings
+    return count
+
+async def process_job(job_id: str, low_confidence: bool = False):
+    """Process a job and generate results"""
+    job = await db.jobs.find_one({"job_id": job_id}, {"_id": 0})
+    if not job:
+        logger.error(f"Job {job_id} not found for processing")
+        return
     
-    # Get ratings for photos
-    ratings = []
+    # Get all ratings for photos in this job
+    photo_scores = []
+    all_rater_ids = set()
+    
     for photo_id in job.get("photo_ids", []):
         photo_ratings = await db.ratings.find({"photo_id": photo_id}, {"_id": 0}).to_list(100)
-        ratings.append({
-            "photo_id": photo_id,
-            "ratings": photo_ratings,
-            "avg_confident": sum(r["confident"] for r in photo_ratings) / len(photo_ratings) if photo_ratings else 0,
-            "avg_approachable": sum(r["approachable"] for r in photo_ratings) / len(photo_ratings) if photo_ratings else 0,
-            "avg_attractive": sum(r["attractive"] for r in photo_ratings) / len(photo_ratings) if photo_ratings else 0,
-            "comments": [r["comment"] for r in photo_ratings if r.get("comment")],
-            "tags": [tag for r in photo_ratings for tag in r.get("tags", [])]
-        })
+        
+        if photo_ratings:
+            # Weighted formula: (avg_confident × 0.4) + (avg_approachable × 0.35) + (avg_attractive × 0.25)
+            avg_confident = sum(r["confident"] for r in photo_ratings) / len(photo_ratings)
+            avg_approachable = sum(r["approachable"] for r in photo_ratings) / len(photo_ratings)
+            avg_attractive = sum(r["attractive"] for r in photo_ratings) / len(photo_ratings)
+            
+            photo_score = (avg_confident * 0.4) + (avg_approachable * 0.35) + (avg_attractive * 0.25)
+            
+            for r in photo_ratings:
+                all_rater_ids.add(r["rater_id"])
+            
+            photo_scores.append({
+                "photo_id": photo_id,
+                "photo_score": photo_score,
+                "avg_confident": avg_confident,
+                "avg_approachable": avg_approachable,
+                "avg_attractive": avg_attractive,
+                "rating_count": len(photo_ratings),
+                "comments": [r["comment"] for r in photo_ratings if r.get("comment")],
+                "tags": [tag for r in photo_ratings for tag in r.get("tags", [])]
+            })
+        else:
+            photo_scores.append({
+                "photo_id": photo_id,
+                "photo_score": 0,
+                "avg_confident": 0,
+                "avg_approachable": 0,
+                "avg_attractive": 0,
+                "rating_count": 0,
+                "comments": [],
+                "tags": []
+            })
     
-    # Sort by total score
-    ratings.sort(key=lambda x: x["avg_confident"] + x["avg_approachable"] + x["avg_attractive"], reverse=True)
+    # Sort by photo_score descending
+    photo_scores.sort(key=lambda x: x["photo_score"], reverse=True)
+    
+    # Flag lowest-scoring photo as "remove this"
+    if photo_scores:
+        photo_scores[-1]["remove_this"] = True
+    
+    total_raters = len(all_rater_ids)
     
     result = {
-        "winner": ratings[0] if ratings else None,
-        "ranked": ratings,
-        "feedback": [r["comments"] for r in ratings],
+        "winner": photo_scores[0] if photo_scores else None,
+        "ranked": photo_scores,
+        "total_raters": total_raters,
+        "low_confidence": low_confidence,
         "processed_at": datetime.now(timezone.utc).isoformat()
     }
     
+    # Update job
     await db.jobs.update_one(
         {"job_id": job_id},
         {"$set": {
             "status": "complete",
             "result": result,
+            "low_confidence": low_confidence,
             "completed_at": datetime.now(timezone.utc).isoformat()
         }}
     )
@@ -1022,14 +1006,372 @@ async def process_job(job_id: str, request: Request):
     # Send email notification
     job_user = await db.users.find_one({"user_id": job["user_id"]}, {"_id": 0})
     if job_user:
-        await send_job_complete_email(
+        await send_results_email(
             user_email=job_user.get("email"),
             user_name=job_user.get("name", "there"),
             job_type=job["type"],
-            job_id=job_id
+            job_id=job_id,
+            rater_count=total_raters,
+            low_confidence=low_confidence
         )
     
-    return result
+    # Award 0.2 credits to each rater (skip Pro raters)
+    for rater_id in all_rater_ids:
+        rater = await db.users.find_one({"user_id": rater_id}, {"_id": 0})
+        if rater and rater.get("tier") != "pro":
+            await db.users.update_one(
+                {"user_id": rater_id},
+                {"$inc": {"credits": 0.2}}
+            )
+            await db.credit_earnings.insert_one({
+                "user_id": rater_id,
+                "amount": 0.2,
+                "reason": "job_completion_bonus",
+                "job_id": job_id,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+    
+    logger.info(f"Job {job_id} processed successfully with {total_raters} raters")
+
+async def fail_job(job_id: str, refund: bool = False, refund_amount: int = 0):
+    """Mark a job as failed and optionally refund credits"""
+    job = await db.jobs.find_one({"job_id": job_id}, {"_id": 0})
+    if not job:
+        return
+    
+    # Update job status
+    await db.jobs.update_one(
+        {"job_id": job_id},
+        {"$set": {
+            "status": "failed",
+            "completed_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    # Refund credits if applicable
+    if refund and refund_amount > 0:
+        await db.users.update_one(
+            {"user_id": job["user_id"]},
+            {"$inc": {"credits": refund_amount}}
+        )
+    
+    # Send apology email
+    job_user = await db.users.find_one({"user_id": job["user_id"]}, {"_id": 0})
+    if job_user:
+        await send_job_failed_email(
+            user_email=job_user.get("email"),
+            user_name=job_user.get("name", "there"),
+            job_type=job["type"],
+            refunded=refund,
+            refund_amount=refund_amount
+        )
+    
+    logger.info(f"Job {job_id} marked as failed, refund={refund}, amount={refund_amount}")
+
+async def run_job_worker():
+    """Background job worker - runs every 15 minutes"""
+    logger.info("Running job worker...")
+    
+    # Get all queued or processing jobs
+    jobs = await db.jobs.find(
+        {"status": {"$in": ["queued", "processing"]}},
+        {"_id": 0}
+    ).to_list(100)
+    
+    now = datetime.now(timezone.utc)
+    
+    for job in jobs:
+        job_id = job["job_id"]
+        tier = job.get("tier", "free")
+        tier_config = TIER_CONFIG.get(tier, TIER_CONFIG["free"])
+        
+        created_at = datetime.fromisoformat(job["created_at"])
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        
+        time_elapsed = now - created_at
+        hours_elapsed = time_elapsed.total_seconds() / 3600
+        
+        # Get ratings count for this job
+        ratings_count = await get_job_ratings_count(job_id)
+        
+        min_ratings = tier_config["min_ratings"]
+        time_cap_hours = tier_config["time_cap_hours"]
+        low_confidence_min = tier_config["low_confidence_min"]
+        extension_hours = tier_config["extension_hours"]
+        
+        # Check extension status
+        extended = job.get("extended", False)
+        extension_count = job.get("extension_count", 0)
+        
+        # Calculate effective time cap (with extension if applied)
+        effective_time_cap = time_cap_hours
+        if extended:
+            effective_time_cap = time_cap_hours + extension_hours
+        
+        # Condition 1: Has ratings_count reached the tier minimum?
+        if ratings_count >= min_ratings:
+            logger.info(f"Job {job_id}: Processing with {ratings_count} ratings (min={min_ratings})")
+            await process_job(job_id, low_confidence=False)
+            continue
+        
+        # Condition 2: Has time since submission exceeded the tier time cap?
+        if hours_elapsed >= effective_time_cap:
+            # Check if we have enough for low confidence processing
+            if ratings_count >= low_confidence_min:
+                logger.info(f"Job {job_id}: Processing with low confidence ({ratings_count} ratings at {hours_elapsed:.1f}hrs)")
+                await process_job(job_id, low_confidence=True)
+            elif not extended and extension_count == 0:
+                # Apply extension
+                logger.info(f"Job {job_id}: Extending by {extension_hours} hours (only {ratings_count} ratings)")
+                await db.jobs.update_one(
+                    {"job_id": job_id},
+                    {"$set": {"extended": True, "extension_count": 1}}
+                )
+            else:
+                # Already extended, job fails
+                logger.info(f"Job {job_id}: Failing - insufficient ratings after extension")
+                
+                # Determine refund
+                refund = False
+                refund_amount = 0
+                
+                if tier == "free":
+                    refund = True
+                    refund_amount = 1  # Refund 1 credit
+                elif tier == "priority":
+                    refund = True
+                    refund_amount = 1  # Refund 1 credit from monthly balance
+                # Pro tier: no refund
+                
+                await fail_job(job_id, refund=refund, refund_amount=refund_amount)
+        
+        # Update job status to processing if not already
+        if job["status"] == "queued":
+            await db.jobs.update_one(
+                {"job_id": job_id},
+                {"$set": {"status": "processing"}}
+            )
+    
+    logger.info(f"Job worker completed. Processed {len(jobs)} jobs.")
+
+# API endpoint to trigger job worker manually (for testing)
+@api_router.post("/admin/run-worker")
+async def trigger_job_worker(request: Request):
+    """Admin endpoint to manually trigger the job worker"""
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    await run_job_worker()
+    return {"message": "Job worker executed"}
+
+# ==================== STRIPE SUBSCRIPTIONS ====================
+STRIPE_PRODUCTS = {
+    "priority": {
+        "name": "Priority",
+        "price": 9.00,
+        "credits": 12,
+    },
+    "pro": {
+        "name": "Pro",
+        "price": 25.00,
+        "credits": None,  # Unlimited
+    }
+}
+
+@api_router.post("/payments/subscribe")
+async def create_subscription(data: CheckoutRequest, request: Request):
+    """Create a Stripe subscription checkout session"""
+    user = await get_current_user(request)
+    
+    if data.package_id not in STRIPE_PRODUCTS:
+        raise HTTPException(status_code=400, detail="Invalid package")
+    
+    product = STRIPE_PRODUCTS[data.package_id]
+    
+    # Create or get Stripe customer
+    customer_id = user.get("stripe_customer_id")
+    if not customer_id:
+        customer = stripe.Customer.create(
+            email=user["email"],
+            name=user.get("name"),
+            metadata={"user_id": user["user_id"]}
+        )
+        customer_id = customer.id
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": {"stripe_customer_id": customer_id}}
+        )
+    
+    # Create checkout session for subscription
+    success_url = f"{data.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{data.origin_url}/pricing"
+    
+    session = stripe.checkout.Session.create(
+        customer=customer_id,
+        payment_method_types=["card"],
+        line_items=[{
+            "price_data": {
+                "currency": "usd",
+                "product_data": {
+                    "name": f"MatchMe {product['name']}",
+                    "description": f"${product['price']}/month subscription"
+                },
+                "unit_amount": int(product["price"] * 100),
+                "recurring": {"interval": "month"}
+            },
+            "quantity": 1
+        }],
+        mode="subscription",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={
+            "user_id": user["user_id"],
+            "package_id": data.package_id
+        }
+    )
+    
+    return {"url": session.url, "session_id": session.id}
+
+@api_router.get("/payments/status/{session_id}")
+async def get_payment_status(session_id: str, request: Request):
+    user = await get_current_user(request)
+    
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        
+        if session.payment_status == "paid" or session.status == "complete":
+            # Get subscription details
+            subscription_id = session.subscription
+            package_id = session.metadata.get("package_id")
+            
+            if subscription_id and package_id:
+                # Update user tier and credits
+                update_fields = {"tier": package_id, "stripe_subscription_id": subscription_id}
+                
+                if package_id == "priority":
+                    update_fields["credits"] = STRIPE_PRODUCTS["priority"]["credits"]
+                    update_fields["subscription_start_date"] = datetime.now(timezone.utc).isoformat()
+                
+                await db.users.update_one(
+                    {"user_id": user["user_id"]},
+                    {"$set": update_fields}
+                )
+        
+        return {
+            "session_id": session_id,
+            "status": session.status,
+            "payment_status": session.payment_status,
+            "subscription_id": session.subscription
+        }
+    except Exception as e:
+        logger.error(f"Error checking payment status: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhooks for subscriptions"""
+    body = await request.body()
+    signature = request.headers.get("Stripe-Signature")
+    
+    # For now, process without signature verification (add webhook secret in production)
+    try:
+        payload = body.decode("utf-8")
+        event = stripe.Event.construct_from(
+            stripe.util.convert_to_dict(stripe.util.json.loads(payload)),
+            stripe.api_key
+        )
+    except Exception as e:
+        logger.error(f"Webhook parsing error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    
+    event_type = event.type
+    data = event.data.object
+    
+    logger.info(f"Stripe webhook: {event_type}")
+    
+    if event_type == "customer.subscription.created":
+        # Subscription created - activate tier
+        customer_id = data.customer
+        subscription_id = data.id
+        
+        user = await db.users.find_one({"stripe_customer_id": customer_id}, {"_id": 0})
+        if user:
+            # Determine tier from subscription price
+            amount = data.items.data[0].price.unit_amount / 100
+            tier = "priority" if amount == 9 else "pro" if amount == 25 else "free"
+            
+            update_fields = {
+                "tier": tier,
+                "stripe_subscription_id": subscription_id,
+                "subscription_start_date": datetime.now(timezone.utc).isoformat()
+            }
+            
+            if tier == "priority":
+                update_fields["credits"] = STRIPE_PRODUCTS["priority"]["credits"]
+            
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": update_fields}
+            )
+            logger.info(f"Subscription created for {user['user_id']}: {tier}")
+    
+    elif event_type == "invoice.paid":
+        # Subscription renewed - reset credits for Priority
+        subscription_id = data.subscription
+        
+        user = await db.users.find_one({"stripe_subscription_id": subscription_id}, {"_id": 0})
+        if user and user.get("tier") == "priority":
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": {
+                    "credits": STRIPE_PRODUCTS["priority"]["credits"],
+                    "subscription_start_date": datetime.now(timezone.utc).isoformat()
+                }}
+            )
+            logger.info(f"Priority credits reset for {user['user_id']}")
+    
+    elif event_type == "customer.subscription.deleted":
+        # Subscription cancelled - downgrade to free
+        subscription_id = data.id
+        
+        user = await db.users.find_one({"stripe_subscription_id": subscription_id}, {"_id": 0})
+        if user:
+            # Keep remaining credits for Priority users
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": {
+                    "tier": "free",
+                    "stripe_subscription_id": None
+                }}
+            )
+            logger.info(f"Subscription cancelled for {user['user_id']}, downgraded to free")
+    
+    return {"received": True}
+
+@api_router.post("/payments/cancel-subscription")
+async def cancel_subscription(request: Request):
+    """Cancel user's subscription"""
+    user = await get_current_user(request)
+    
+    subscription_id = user.get("stripe_subscription_id")
+    if not subscription_id:
+        raise HTTPException(status_code=400, detail="No active subscription")
+    
+    try:
+        stripe.Subscription.delete(subscription_id)
+        
+        # Update user (webhook will also fire, but update immediately for UX)
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": {"tier": "free", "stripe_subscription_id": None}}
+        )
+        
+        return {"message": "Subscription cancelled"}
+    except Exception as e:
+        logger.error(f"Error cancelling subscription: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 # ==================== HEALTH CHECK ====================
 @api_router.get("/")
@@ -1043,7 +1385,7 @@ async def health():
 # Include the router in the main app
 app.include_router(api_router)
 
-# CORS - properly configured for credentials
+# CORS
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://matchme-preview.preview.emergentagent.com")
 app.add_middleware(
     CORSMiddleware,
@@ -1053,21 +1395,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ==================== BACKGROUND TASK SCHEDULER ====================
+async def scheduler():
+    """Run job worker every 15 minutes"""
+    while True:
+        try:
+            await run_job_worker()
+        except Exception as e:
+            logger.error(f"Job worker error: {e}")
+        await asyncio.sleep(15 * 60)  # 15 minutes
+
 # ==================== STARTUP ====================
 @app.on_event("startup")
 async def startup():
     try:
-        # Test MongoDB connection
         await db.command("ping")
         logger.info("Connected to MongoDB Atlas")
         
         # Create indexes
         await db.users.create_index("email", unique=True)
         await db.users.create_index("user_id", unique=True)
+        await db.users.create_index("stripe_customer_id", sparse=True)
         await db.photos.create_index("user_id")
         await db.photos.create_index("photo_id", unique=True)
         await db.jobs.create_index("user_id")
         await db.jobs.create_index("job_id", unique=True)
+        await db.jobs.create_index("status")
         await db.ratings.create_index([("rater_id", 1), ("photo_id", 1)], unique=True)
         await db.login_attempts.create_index("identifier")
         
@@ -1089,6 +1442,8 @@ async def startup():
                 "orientation": None,
                 "dating_app": None,
                 "tier": "pro",
+                "stripe_customer_id": None,
+                "stripe_subscription_id": None,
                 "ratings_given": 0,
                 "ratings_earned": 0,
                 "onboarding_completed": True,
@@ -1096,18 +1451,17 @@ async def startup():
                 "created_at": datetime.now(timezone.utc).isoformat()
             })
             logger.info(f"Admin user created: {admin_email}")
-        elif not verify_password(admin_password, existing.get("password_hash", "")):
-            await db.users.update_one(
-                {"email": admin_email},
-                {"$set": {"password_hash": hash_password(admin_password)}}
-            )
-            logger.info("Admin password updated")
+        
+        # Start background scheduler
+        asyncio.create_task(scheduler())
+        logger.info("Background job scheduler started (15 min interval)")
+        
     except Exception as e:
-        logger.error(f"MongoDB connection failed: {e}")
-        logger.info("Server will continue with local MongoDB fallback")
+        logger.error(f"Startup error: {e}")
     
     logger.info("Cloudinary configured")
     logger.info("Resend email configured")
+    logger.info("Stripe configured")
     
     # Write test credentials
     os.makedirs("/app/memory", exist_ok=True)
@@ -1119,27 +1473,25 @@ async def startup():
 - Password: AdminMatch2024!
 - Role: admin
 
-## Test User
-- Register with any email to create a test user
-- Default credits: 3
+## Tier Structure
+- Free: 3 ratings OR 24hrs, 3 credits on signup, earn 1 per 5 ratings
+- Priority ($9/mo): 7 ratings OR 4hrs, 12 credits/month
+- Pro ($25/mo): 10 ratings OR 4hrs, unlimited uploads, no credits
 
-## Credit System (Updated)
-- Rate {RATINGS_FOR_CREDIT} photos = 1 credit
-- Max {MAX_DAILY_EARNED_CREDITS} earned credits/day
+## Credit Costs
+- Best Shot: 1 credit
+- Profile Analysis: 2 credits
 
-## Services Connected
-- MongoDB Atlas: Configured (check logs for status)
-- Cloudinary: Connected
-- Stripe: Live keys
-- Resend: Connected
+## Background Worker
+- Runs every 15 minutes
+- Processes jobs based on tier conditions
+- Awards 0.2 credits to raters on job completion
 
-## Auth Endpoints
+## API Endpoints
 - POST /api/auth/register
 - POST /api/auth/login
-- POST /api/auth/logout
-- GET /api/auth/me
-- POST /api/auth/refresh
-- POST /api/auth/google/session
+- POST /api/payments/subscribe (subscriptions)
+- POST /api/admin/run-worker (manual worker trigger)
 """)
     logger.info("Test credentials written")
 

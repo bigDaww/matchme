@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Flag, SkipForward } from 'lucide-react';
+import { ArrowLeft, Flag, SkipForward, Infinity } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { API } from '../App';
@@ -71,7 +71,9 @@ const RateOthers = () => {
         comment: comment.trim()
       }, { withCredentials: true });
 
-      if (response.data.earned_credit) {
+      if (response.data.is_pro) {
+        toast.success('Thanks for helping the community!');
+      } else if (response.data.earned_credit) {
         toast.success('You earned 1 credit!');
       } else {
         toast.success(`Rating submitted! ${response.data.ratings_until_credit} more until next credit`);
@@ -137,6 +139,8 @@ const RateOthers = () => {
     );
   }
 
+  const isPro = photo.is_pro;
+
   return (
     <Layout>
       <div className="min-h-screen pb-nav lg:pb-0">
@@ -145,17 +149,27 @@ const RateOthers = () => {
           <button onClick={() => navigate('/dashboard')} className="p-2 -ml-2 lg:hidden" data-testid="back-btn">
             <ArrowLeft size={24} strokeWidth={1.5} />
           </button>
-          <div className="flex items-center gap-2">
-            {[...Array(5)].map((_, i) => (
-              <div 
-                key={i}
-                className={`progress-dot ${i < (photo?.progress || 0) ? 'active' : ''}`}
-              />
-            ))}
-          </div>
-          <div className="badge badge-lilac text-xs">
-            2 = 1 credit
-          </div>
+          {isPro ? (
+            <div className="badge badge-lilac text-xs">
+              <Infinity size={12} className="mr-1" />
+              Pro
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              {[...Array(5)].map((_, i) => (
+                <div 
+                  key={i}
+                  className={`progress-dot ${i < (photo?.progress || 0) ? 'active' : ''}`}
+                />
+              ))}
+            </div>
+          )}
+          {!isPro && (
+            <div className="badge badge-lilac text-xs">
+              5 = 1 credit
+            </div>
+          )}
+          {isPro && <div className="w-10" />}
         </div>
 
         <div className="px-6 md:px-8 lg:px-12 py-6">

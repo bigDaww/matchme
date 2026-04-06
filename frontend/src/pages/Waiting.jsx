@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Bell, Clock } from 'lucide-react';
+import { ArrowLeft, Clock, Users } from 'lucide-react';
 import axios from 'axios';
 import { API } from '../App';
 import Layout from '../components/Layout';
@@ -11,7 +11,6 @@ const Waiting = () => {
   const { jobId } = useParams();
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [notifyEnabled, setNotifyEnabled] = useState(false);
 
   useEffect(() => {
     fetchJob();
@@ -26,6 +25,8 @@ const Waiting = () => {
       
       if (response.data.status === 'complete') {
         navigate(`/results/${jobId}`, { replace: true });
+      } else if (response.data.status === 'failed') {
+        // Stay on page but show failed state
       }
     } catch (error) {
       console.error('Failed to fetch job');
@@ -44,7 +45,56 @@ const Waiting = () => {
     );
   }
 
-  const isPriority = job?.priority === 'paid';
+  if (job?.status === 'failed') {
+    return (
+      <Layout>
+        <div className="min-h-screen">
+          <div className="top-bar border-b border-[#E5E5E5]">
+            <button onClick={() => navigate('/dashboard')} className="p-2 -ml-2 lg:hidden" data-testid="back-btn">
+              <ArrowLeft size={24} strokeWidth={1.5} />
+            </button>
+            <h1 className="text-xl lg:text-2xl" style={{ fontFamily: 'Georgia, serif' }}>
+              Job Failed
+            </h1>
+            <div className="w-10 lg:hidden" />
+          </div>
+
+          <div className="flex-1 flex flex-col items-center justify-center px-6 py-16 md:py-24 text-center">
+            <div className="w-20 h-20 rounded-full bg-[#E5533C] flex items-center justify-center mb-8">
+              <span className="text-white text-3xl">!</span>
+            </div>
+
+            <h2 
+              className="text-2xl md:text-3xl mb-4"
+              style={{ fontFamily: 'Georgia, serif' }}
+            >
+              We couldn't complete your review
+            </h2>
+
+            <p className="text-[#666666] mb-8 max-w-md">
+              Unfortunately, we weren't able to gather enough reviews for your photos. 
+              This can happen during periods of lower activity. Check your email for details.
+            </p>
+
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="btn-pill btn-primary"
+              data-testid="back-to-dashboard"
+            >
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  const tier = job?.tier || 'free';
+  const tierInfo = {
+    free: { time: '24 hours', reviewers: '3' },
+    priority: { time: '2-4 hours', reviewers: '7' },
+    pro: { time: '2-4 hours', reviewers: '10+' }
+  }[tier];
 
   return (
     <Layout>
@@ -75,33 +125,29 @@ const Waiting = () => {
           </h2>
 
           <p className="text-[#666666] mb-8 max-w-md">
-            Real people are reviewing your photos right now.
+            Real people are reviewing your photos right now. We'll email you when results are ready.
           </p>
 
-          <div className="card w-full max-w-sm mb-8">
-            <div className="flex items-center gap-3 mb-2">
-              <Clock size={20} className={isPriority ? 'text-[#C9B8E8]' : 'text-[#666666]'} />
-              <span className="font-medium">
-                {isPriority ? 'Priority queue' : 'Standard queue'}
-              </span>
+          <div className="flex gap-4 mb-8">
+            <div className="card text-center px-6 py-4">
+              <Clock size={24} className="mx-auto mb-2 text-[#C9B8E8]" />
+              <p className="text-sm text-[#666666]">Results in</p>
+              <p className="font-medium">{tierInfo.time}</p>
             </div>
-            <p className="text-sm text-[#666666]">
-              {isPriority 
-                ? 'Results within 2 hours'
-                : 'Results within 24 hours'}
-            </p>
+            <div className="card text-center px-6 py-4">
+              <Users size={24} className="mx-auto mb-2 text-[#C9B8E8]" />
+              <p className="text-sm text-[#666666]">Reviewed by</p>
+              <p className="font-medium">{tierInfo.reviewers} people</p>
+            </div>
           </div>
 
-          <button
-            onClick={() => setNotifyEnabled(!notifyEnabled)}
-            className={`btn-pill ${notifyEnabled ? 'btn-accent' : 'btn-secondary'} gap-2`}
-            data-testid="notify-btn"
-          >
-            <Bell size={18} />
-            {notifyEnabled ? 'Notifications on' : 'Notify me when ready'}
-          </button>
+          {job?.extended && (
+            <p className="text-sm text-[#666666] bg-[#F7F7F5] px-4 py-2 rounded-full mb-4">
+              Extended review period active
+            </p>
+          )}
 
-          <p className="text-xs text-[#666666] mt-8">
+          <p className="text-xs text-[#666666]">
             Job ID: {jobId?.slice(0, 8)}...
           </p>
         </div>
