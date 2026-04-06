@@ -776,6 +776,9 @@ async def submit_rating(data: RatingSubmit, request: Request):
     user = await get_current_user(request)
     tier = user.get("tier", "free")
     
+    if not data.comment or not data.comment.strip():
+        raise HTTPException(status_code=400, detail="Comment is required")
+    
     # Check if already rated
     existing = await db.ratings.find_one(
         {"rater_id": user["user_id"], "photo_id": data.photo_id},

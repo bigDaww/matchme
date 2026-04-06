@@ -66,7 +66,7 @@ const BestShot = () => {
       return;
     }
 
-    if ((user?.credits || 0) < 1) {
+    if (user?.tier !== 'pro' && (user?.credits || 0) < 1) {
       toast.error('Not enough credits');
       navigate('/pricing');
       return;
@@ -200,16 +200,21 @@ const BestShot = () => {
                       {photos.length < 3 && <span className="block text-[#E5533C]">Need at least 3</span>}
                     </p>
 
-                    <div className="space-y-3">
-                      <div className="flex justify-between text-sm">
-                        <span>Cost</span>
-                        <span className="font-medium">1 credit</span>
+                    {user?.tier !== 'pro' && (
+                      <div className="space-y-3">
+                        <div className="flex justify-between text-sm">
+                          <span>Cost</span>
+                          <span className="font-medium">1 credit</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span>Your balance</span>
+                          <span className="font-medium">{user?.credits || 0} credits</span>
+                        </div>
                       </div>
-                      <div className="flex justify-between text-sm">
-                        <span>Your balance</span>
-                        <span className="font-medium">{user?.credits || 0} credits</span>
-                      </div>
-                    </div>
+                    )}
+                    {user?.tier === 'pro' && (
+                      <p className="text-sm text-[#666666] mb-2">Included with your Pro plan</p>
+                    )}
 
                     <hr className="my-4 border-[#E5E5E5]" />
 
@@ -230,7 +235,7 @@ const BestShot = () => {
                     </button>
 
                     <p className="text-center text-xs text-[#666666] mt-4">
-                      Results delivered within 24 hours
+                      Results delivered within {user?.tier === 'free' || !user?.tier ? '24 hours' : '2-4 hours'}
                     </p>
                   </div>
                 </div>

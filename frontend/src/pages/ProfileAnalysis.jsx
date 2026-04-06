@@ -68,7 +68,7 @@ const ProfileAnalysis = () => {
       return;
     }
 
-    if ((user?.credits || 0) < 2) {
+    if (user?.tier !== 'pro' && (user?.credits || 0) < 2) {
       toast.error('Not enough credits (need 2)');
       navigate('/pricing');
       return;
@@ -220,16 +220,20 @@ const ProfileAnalysis = () => {
                       Ready to submit?
                     </h3>
                     
-                    <div className="space-y-3 mb-4">
-                      <div className="flex justify-between text-sm">
-                        <span>Cost</span>
-                        <span className="font-medium">2 credits</span>
+                    {user?.tier !== 'pro' ? (
+                      <div className="space-y-3 mb-4">
+                        <div className="flex justify-between text-sm">
+                          <span>Cost</span>
+                          <span className="font-medium">2 credits</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span>Your balance</span>
+                          <span className="font-medium">{user?.credits || 0} credits</span>
+                        </div>
                       </div>
-                      <div className="flex justify-between text-sm">
-                        <span>Your balance</span>
-                        <span className="font-medium">{user?.credits || 0} credits</span>
-                      </div>
-                    </div>
+                    ) : (
+                      <p className="text-sm text-[#666666] mb-4">Included with your Pro plan</p>
+                    )}
 
                     {/* Submit Button */}
                     <button
