@@ -19,7 +19,7 @@ Build a web app called MatchMe — a premium dating profile optimizer. Users upl
 - Hinge-style mobile-first UI
 
 ## Services Connected (Jan 2026)
-- **MongoDB**: Local instance (Atlas connection failed due to network SSL issues - credentials saved for future use)
+- **MongoDB Atlas**: Connected (matchme.f5d4nup.mongodb.net)
 - **Cloudinary**: Connected (dfhxmvfnk) - Photo uploads working
 - **Stripe**: Live keys configured
 - **Resend**: Connected for email notifications
