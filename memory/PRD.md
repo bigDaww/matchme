@@ -18,6 +18,17 @@ Build a web app called MatchMe — a premium dating profile optimizer. Users upl
 - JWT auth + Google OAuth
 - Hinge-style mobile-first UI
 
+## Services Connected (Jan 2026)
+- **MongoDB**: Local instance (Atlas connection failed due to network SSL issues - credentials saved for future use)
+- **Cloudinary**: Connected (dfhxmvfnk) - Photo uploads working
+- **Stripe**: Live keys configured
+- **Resend**: Connected for email notifications
+
+## Credit System (Updated)
+- Rate **2** photos = 1 credit (changed from 5)
+- Max 5 earned credits/day
+- 3 free credits on signup
+
 ## What's Been Implemented (Jan 2026)
 
 ### Responsive Design Update
