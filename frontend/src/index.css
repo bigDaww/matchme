@@ -133,7 +133,8 @@ body {
   background-color: transparent;
   border: none;
   border-bottom: 1px solid var(--border-gray);
-  padding: 12px 0;
+  padding-top: 12px;
+  padding-bottom: 12px;
   font-size: 18px;
   font-family: 'Inter', sans-serif;
   outline: none;

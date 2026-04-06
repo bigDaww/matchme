@@ -228,7 +228,7 @@ const ProfileAnalysis = () => {
                         </div>
                         <div className="flex justify-between text-sm">
                           <span>Your balance</span>
-                          <span className="font-medium">{user?.credits || 0} credits</span>
+                          <span className="font-medium">{Math.floor(user?.credits || 0)} credits</span>
                         </div>
                       </div>
                     ) : (

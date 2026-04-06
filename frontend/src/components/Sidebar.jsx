@@ -38,7 +38,7 @@ const Sidebar = () => {
         <p className="text-sm text-[#666666] truncate">{user?.email}</p>
         <div className="mt-2 badge badge-lilac">
           <Star size={12} className="mr-1" fill="#1A1A1A" />
-          {user?.credits || 0} credits
+          {Math.floor(user?.credits || 0)} credits
         </div>
       </div>
 

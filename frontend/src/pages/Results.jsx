@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Crown, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Crown, MessageSquare, User } from 'lucide-react';
 import axios from 'axios';
 import { API } from '../App';
 import Layout from '../components/Layout';
@@ -71,6 +71,11 @@ const Results = () => {
   const result = job.result;
   const winner = result?.winner;
   const ranked = result?.ranked || [];
+
+  // Collect all individual ratings across all photos for display
+  const allRatings = ranked.flatMap(photo => 
+    (photo.ratings || []).map(r => ({ ...r, photo_id: photo.photo_id }))
+  );
 
   return (
     <Layout>
@@ -161,10 +166,10 @@ const Results = () => {
                 )}
               </div>
 
-              {/* Right Column - Feedback */}
+              {/* Right Column - Individual Reviews */}
               <div className="col-right">
-                {/* Comments */}
-                {winner?.comments?.length > 0 && (
+                {/* Individual Ratings with Usernames */}
+                {allRatings.length > 0 && (
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -173,17 +178,41 @@ const Results = () => {
                   >
                     <h3 className="text-sm text-[#666666] uppercase tracking-wider mb-3 flex items-center gap-2">
                       <MessageSquare size={14} />
-                      What people said
+                      Reviews ({allRatings.length})
                     </h3>
                     <div className="space-y-3">
-                      {winner.comments.slice(0, 6).map((comment, index) => (
-                        <div key={index} className="card flex items-start gap-3">
-                          <div className="w-8 h-8 rounded-full bg-[#F7F7F5] flex items-center justify-center flex-shrink-0">
-                            <span className="text-sm font-medium">
-                              {String.fromCharCode(65 + index)}
+                      {allRatings.map((rating, index) => (
+                        <div key={index} className="card" data-testid={`review-card-${index}`}>
+                          {/* Rater Username */}
+                          <div className="flex items-center gap-2 mb-3">
+                            <div className="w-8 h-8 rounded-full bg-[#F7F7F5] flex items-center justify-center flex-shrink-0">
+                              <User size={16} strokeWidth={1.5} className="text-[#666666]" />
+                            </div>
+                            <span className="font-medium text-[#1A1A1A]" data-testid={`reviewer-name-${index}`}>
+                              {rating.rater_username || 'Anonymous'}
                             </span>
                           </div>
-                          <p className="text-sm text-[#1A1A1A] flex-1">{comment}</p>
+
+                          {/* Scores */}
+                          <div className="flex gap-4 mb-3">
+                            <div className="text-center flex-1 bg-[#F7F7F5] rounded-[10px] py-2">
+                              <p className="text-lg font-medium">{rating.confident}/5</p>
+                              <p className="text-[10px] text-[#666666]">Confident</p>
+                            </div>
+                            <div className="text-center flex-1 bg-[#F7F7F5] rounded-[10px] py-2">
+                              <p className="text-lg font-medium">{rating.approachable}/5</p>
+                              <p className="text-[10px] text-[#666666]">Approachable</p>
+                            </div>
+                            <div className="text-center flex-1 bg-[#F7F7F5] rounded-[10px] py-2">
+                              <p className="text-lg font-medium">{rating.attractive}/5</p>
+                              <p className="text-[10px] text-[#666666]">Attractive</p>
+                            </div>
+                          </div>
+
+                          {/* Comment */}
+                          {rating.comment && (
+                            <p className="text-sm text-[#1A1A1A]">{rating.comment}</p>
+                          )}
                         </div>
                       ))}
                     </div>

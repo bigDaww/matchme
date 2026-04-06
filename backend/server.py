@@ -338,6 +338,8 @@ async def register(data: UserRegister, response: Response):
         "subscription_start_date": None,
         "ratings_given": 0,
         "ratings_earned": 0,
+        "ratings_since_last_credit": 0,
+        "job_bonus_count": 0,
         "onboarding_completed": False,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -464,6 +466,8 @@ async def google_session(request: Request, response: Response):
             "subscription_start_date": None,
             "ratings_given": 0,
             "ratings_earned": 0,
+            "ratings_since_last_credit": 0,
+            "job_bonus_count": 0,
             "onboarding_completed": False,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -814,11 +818,15 @@ async def submit_rating(data: RatingSubmit, request: Request):
     ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"]
     
     if tier != "pro":
-        # Check if user earns a credit (every 5 ratings for free/priority)
+        # Increment ratings_since_last_credit counter
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$inc": {"ratings_since_last_credit": 1}}
+        )
         updated_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
-        ratings_given = updated_user.get("ratings_given", 0)
+        counter = updated_user.get("ratings_since_last_credit", 0)
         
-        if ratings_given % TIER_CONFIG["free"]["ratings_for_credit"] == 0:
+        if counter >= TIER_CONFIG["free"]["ratings_for_credit"]:
             # Check daily earning limit
             today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             credits_earned_today = await db.credit_earnings.count_documents({
@@ -829,7 +837,7 @@ async def submit_rating(data: RatingSubmit, request: Request):
             if credits_earned_today < TIER_CONFIG["free"]["max_daily_earned_credits"]:
                 await db.users.update_one(
                     {"user_id": user["user_id"]},
-                    {"$inc": {"credits": 1}}
+                    {"$set": {"ratings_since_last_credit": 0}, "$inc": {"credits": 1}}
                 )
                 await db.credit_earnings.insert_one({
                     "user_id": user["user_id"],
@@ -838,10 +846,9 @@ async def submit_rating(data: RatingSubmit, request: Request):
                     "created_at": datetime.now(timezone.utc).isoformat()
                 })
                 earned_credit = True
+                counter = 0
         
-        ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"] - (ratings_given % TIER_CONFIG["free"]["ratings_for_credit"])
-        if earned_credit:
-            ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"]
+        ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"] - counter
     
     # Update photo owner's ratings earned
     photo = await db.photos.find_one({"photo_id": data.photo_id}, {"_id": 0})
@@ -953,8 +960,19 @@ async def process_job(job_id: str, low_confidence: bool = False):
             
             photo_score = (avg_confident * 0.4) + (avg_approachable * 0.35) + (avg_attractive * 0.25)
             
+            # Build individual ratings with rater usernames
+            individual_ratings = []
             for r in photo_ratings:
                 all_rater_ids.add(r["rater_id"])
+                rater_user = await db.users.find_one({"user_id": r["rater_id"]}, {"_id": 0, "name": 1})
+                individual_ratings.append({
+                    "rater_username": rater_user.get("name", "Anonymous") if rater_user else "Anonymous",
+                    "confident": r["confident"],
+                    "approachable": r["approachable"],
+                    "attractive": r["attractive"],
+                    "comment": r.get("comment", ""),
+                    "tags": r.get("tags", [])
+                })
             
             photo_scores.append({
                 "photo_id": photo_id,
@@ -963,6 +981,7 @@ async def process_job(job_id: str, low_confidence: bool = False):
                 "avg_approachable": avg_approachable,
                 "avg_attractive": avg_attractive,
                 "rating_count": len(photo_ratings),
+                "ratings": individual_ratings,
                 "comments": [r["comment"] for r in photo_ratings if r.get("comment")],
                 "tags": [tag for r in photo_ratings for tag in r.get("tags", [])]
             })
@@ -974,6 +993,7 @@ async def process_job(job_id: str, low_confidence: bool = False):
                 "avg_approachable": 0,
                 "avg_attractive": 0,
                 "rating_count": 0,
+                "ratings": [],
                 "comments": [],
                 "tags": []
             })
@@ -1018,21 +1038,28 @@ async def process_job(job_id: str, low_confidence: bool = False):
             low_confidence=low_confidence
         )
     
-    # Award 0.2 credits to each rater (skip Pro raters)
+    # Award bonus to each rater via counter (skip Pro raters)
+    # Every 5 job completions where user was a rater = 1 whole credit
     for rater_id in all_rater_ids:
         rater = await db.users.find_one({"user_id": rater_id}, {"_id": 0})
         if rater and rater.get("tier") != "pro":
             await db.users.update_one(
                 {"user_id": rater_id},
-                {"$inc": {"credits": 0.2}}
+                {"$inc": {"job_bonus_count": 1}}
             )
-            await db.credit_earnings.insert_one({
-                "user_id": rater_id,
-                "amount": 0.2,
-                "reason": "job_completion_bonus",
-                "job_id": job_id,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            })
+            updated_rater = await db.users.find_one({"user_id": rater_id}, {"_id": 0})
+            if updated_rater.get("job_bonus_count", 0) >= 5:
+                await db.users.update_one(
+                    {"user_id": rater_id},
+                    {"$set": {"job_bonus_count": 0}, "$inc": {"credits": 1}}
+                )
+                await db.credit_earnings.insert_one({
+                    "user_id": rater_id,
+                    "amount": 1,
+                    "reason": "job_completion_bonus",
+                    "job_id": job_id,
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                })
     
     logger.info(f"Job {job_id} processed successfully with {total_raters} raters")
 

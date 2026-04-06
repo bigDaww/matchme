@@ -38,7 +38,7 @@ const Dashboard = () => {
     );
   }
 
-  const credits = dashboard?.user?.credits;
+  const credits = dashboard?.user?.credits != null ? Math.floor(dashboard.user.credits) : null;
   const tier = dashboard?.user?.tier ?? user?.tier ?? 'free';
   const isPro = tier === 'pro';
   const tierInfo = dashboard?.tier_info || {};

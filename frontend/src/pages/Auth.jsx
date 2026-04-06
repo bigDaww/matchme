@@ -143,7 +143,7 @@ const Auth = () => {
                   placeholder="Your name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="input-minimal pl-8"
+                  className="input-minimal pl-10"
                   required={!isLogin}
                   data-testid="name-input"
                 />
@@ -157,7 +157,7 @@ const Auth = () => {
                 placeholder="Email address"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="input-minimal pl-8"
+                className="input-minimal pl-10"
                 required
                 data-testid="email-input"
               />
@@ -170,7 +170,7 @@ const Auth = () => {
                 placeholder="Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="input-minimal pl-8"
+                className="input-minimal pl-10"
                 required
                 minLength={6}
                 data-testid="password-input"
