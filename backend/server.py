@@ -19,8 +19,9 @@ import cloudinary
 import cloudinary.uploader
 import cloudinary.utils
 import resend
+import base64
+import httpx
 from bson import ObjectId
-from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutSessionRequest
 import stripe
 
 # Configure logging
@@ -54,8 +55,88 @@ cloudinary.config(
 resend.api_key = os.environ.get("RESEND_API_KEY")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "noreply@matchme.app")
 
+# Anthropic Configuration (for photo moderation)
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+
 # Stripe Configuration
 stripe.api_key = os.environ.get("STRIPE_API_KEY")
+
+# ==================== PHOTO MODERATION ====================
+async def moderate_photo(image_data: bytes, content_type: str) -> dict:
+    """
+    Use Claude vision to check if a photo is safe for the platform.
+    Returns {"safe": bool, "reason": str}
+    """
+    if not ANTHROPIC_API_KEY:
+        logger.warning("ANTHROPIC_API_KEY not set — skipping moderation")
+        return {"safe": True, "reason": "moderation_skipped"}
+
+    try:
+        media_type = content_type if content_type in ["image/jpeg", "image/png", "image/gif", "image/webp"] else "image/jpeg"
+        image_b64 = base64.standard_b64encode(image_data).decode("utf-8")
+
+        payload = {
+            "model": "claude-opus-4-5",
+            "max_tokens": 100,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": image_b64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "You are a content moderator for a dating profile review app. "
+                                "Analyze this photo and respond with ONLY a JSON object like: "
+                                "{\"safe\": true} or {\"safe\": false, \"reason\": \"brief reason\"}. "
+                                "Flag as unsafe ONLY if the image contains: explicit nudity or sexual content, "
+                                "graphic violence or gore, or content that is clearly not a person/profile photo "
+                                "(e.g. genitalia, explicit acts). "
+                                "Normal swimwear, shirtless photos, and tasteful images are SAFE. "
+                                "Do not flag based on attractiveness, age appearance, or race. "
+                                "Respond with only the JSON, nothing else."
+                            )
+                        }
+                    ]
+                }
+            ]
+        }
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json=payload
+            )
+            resp.raise_for_status()
+            result = resp.json()
+
+        text = result["content"][0]["text"].strip()
+        # Strip markdown fences if present
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        import json as _json
+        moderation = _json.loads(text)
+        logger.info(f"Moderation result: {moderation}")
+        return moderation
+
+    except Exception as e:
+        logger.error(f"Moderation error: {e}")
+        # Fail open — don't block uploads if moderation is down
+        return {"safe": True, "reason": "moderation_error"}
 
 # ==================== TIER CONFIGURATION ====================
 TIER_CONFIG = {
@@ -521,6 +602,16 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 10MB)")
     
+    # ---- MODERATION CHECK ----
+    moderation = await moderate_photo(data, file.content_type)
+    if not moderation.get("safe", True):
+        reason = moderation.get("reason", "inappropriate content")
+        logger.warning(f"Photo blocked by moderation for user {user['user_id']}: {reason}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Photo rejected: {reason}. Please upload an appropriate profile photo."
+        )
+
     photo_id = str(uuid.uuid4())
     folder = f"matchme/users/{user['user_id']}/photos"
     
@@ -548,6 +639,8 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         "height": result.get("height"),
         "size": result.get("bytes"),
         "is_deleted": False,
+        "report_count": 0,
+        "moderation_passed": True,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.photos.insert_one(photo_doc)
@@ -724,6 +817,7 @@ async def get_next_photo_to_rate(request: Request):
     
     # Find photos from queued jobs that user hasn't rated yet
     rated_photo_ids = await db.ratings.distinct("photo_id", {"rater_id": user["user_id"]})
+    reported_photo_ids = await db.reports.distinct("photo_id", {"reporter_id": user["user_id"]})
     
     # Get queued jobs
     pipeline = [
@@ -747,9 +841,9 @@ async def get_next_photo_to_rate(request: Request):
         if user_orientation == "women" and job_user.get("gender") != "woman":
             continue
         
-        # Get first unrated photo from this job
+        # Get first unrated, unreported photo from this job
         for photo_id in job.get("photo_ids", []):
-            if photo_id not in rated_photo_ids:
+            if photo_id not in rated_photo_ids and photo_id not in reported_photo_ids:
                 photo = await db.photos.find_one({"photo_id": photo_id, "is_deleted": False}, {"_id": 0})
                 if photo:
                     # Count ratings for progress display
@@ -868,13 +962,39 @@ async def submit_rating(data: RatingSubmit, request: Request):
 @api_router.post("/rate/report")
 async def report_photo(request: Request, photo_id: str):
     user = await get_current_user(request)
+
+    # Prevent duplicate reports from same user
+    existing_report = await db.reports.find_one({
+        "reporter_id": user["user_id"],
+        "photo_id": photo_id
+    })
+    if existing_report:
+        return {"message": "Already reported"}
+
     await db.reports.insert_one({
         "report_id": str(uuid.uuid4()),
         "reporter_id": user["user_id"],
         "photo_id": photo_id,
         "created_at": datetime.now(timezone.utc).isoformat()
     })
-    return {"message": "Photo reported"}
+
+    # Increment report count on photo
+    await db.photos.update_one(
+        {"photo_id": photo_id},
+        {"$inc": {"report_count": 1}}
+    )
+
+    # Auto-hide photo if it reaches 3 reports
+    photo = await db.photos.find_one({"photo_id": photo_id}, {"_id": 0})
+    if photo and photo.get("report_count", 0) >= 3:
+        await db.photos.update_one(
+            {"photo_id": photo_id},
+            {"$set": {"is_deleted": True}}
+        )
+        # Also mark the job as needing review if this was the only photo
+        logger.warning(f"Photo {photo_id} auto-hidden after 3 reports")
+
+    return {"message": "Photo reported. Thank you for keeping MatchMe safe."}
 
 # ==================== DASHBOARD ====================
 @api_router.get("/user/dashboard")
@@ -1402,6 +1522,60 @@ async def cancel_subscription(request: Request):
     except Exception as e:
         logger.error(f"Error cancelling subscription: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+@api_router.get("/admin/reports")
+async def get_reported_photos(request: Request):
+    """Admin endpoint to review reported photos"""
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    # Get photos with 1+ reports (including auto-hidden ones)
+    pipeline = [
+        {"$match": {"report_count": {"$gte": 1}}},
+        {"$sort": {"report_count": -1}},
+        {"$limit": 50}
+    ]
+    photos = await db.photos.aggregate(pipeline).to_list(50)
+    for p in photos:
+        p.pop("_id", None)
+    return photos
+
+@api_router.post("/admin/photos/{photo_id}/restore")
+async def restore_photo(photo_id: str, request: Request):
+    """Admin: restore a falsely reported photo"""
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    await db.photos.update_one(
+        {"photo_id": photo_id},
+        {"$set": {"is_deleted": False, "report_count": 0}}
+    )
+    # Clear all reports for this photo
+    await db.reports.delete_many({"photo_id": photo_id})
+    return {"message": "Photo restored"}
+
+@api_router.delete("/admin/photos/{photo_id}")
+async def admin_delete_photo(photo_id: str, request: Request):
+    """Admin: permanently remove a reported photo"""
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    photo = await db.photos.find_one({"photo_id": photo_id}, {"_id": 0})
+    if photo:
+        try:
+            await asyncio.to_thread(
+                cloudinary.uploader.destroy,
+                photo["public_id"],
+                invalidate=True
+            )
+        except Exception as e:
+            logger.error(f"Cloudinary delete failed: {e}")
+    
+    await db.photos.update_one({"photo_id": photo_id}, {"$set": {"is_deleted": True}})
+    return {"message": "Photo deleted"}
 
 # ==================== HEALTH CHECK ====================
 @api_router.get("/")
