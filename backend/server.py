@@ -1668,8 +1668,8 @@ async def startup():
     logger.info("Stripe configured")
     
     # Write test credentials
-    os.makedirs("/app/memory", exist_ok=True)
-    with open("/app/memory/test_credentials.md", "w") as f:
+    os.makedirs("memory", exist_ok=True)
+    with open("memory/test_credentials.md", "w") as f:
         f.write(f"""# Test Credentials
 
 ## Admin Account
