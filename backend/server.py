@@ -1590,11 +1590,11 @@ async def health():
 app.include_router(api_router)
 
 # CORS
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://matchme-preview.preview.emergentagent.com")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://matchme-two.vercel.app")
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000", "https://matchme-preview.preview.emergentagent.com"],
+    allow_origins=[FRONTEND_URL, "https://matchme-two.vercel.app", "http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
