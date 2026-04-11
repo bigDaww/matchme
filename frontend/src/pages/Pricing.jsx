@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Check, Star, Zap, Crown } from 'lucide-react';
@@ -8,8 +8,21 @@ import { useAuth, API } from '../App';
 
 const Pricing = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [loading, setLoading] = useState(null);
+
+  // Load Razorpay script on mount
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    document.body.appendChild(script);
+    return () => {
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
+    };
+  }, []);
 
   const handleSubscribe = async (packageId) => {
     if (!user) {
@@ -24,12 +37,61 @@ const Pricing = () => {
 
     setLoading(packageId);
     try {
+      // 1. Create subscription on backend
       const response = await axios.post(`${API}/payments/subscribe`, {
-        package_id: packageId,
-        origin_url: window.location.origin
+        package_id: packageId
       }, { withCredentials: true });
 
-      window.location.href = response.data.url;
+      const data = response.data;
+
+      // 2. Open Razorpay Checkout modal
+      const options = {
+        key: data.razorpay_key_id,
+        subscription_id: data.subscription_id,
+        name: data.name,
+        description: data.description,
+        prefill: data.prefill,
+        theme: {
+          color: '#1A1A1A'
+        },
+        handler: async function (paymentResponse) {
+          // 3. Verify payment on backend
+          try {
+            const verifyRes = await axios.post(`${API}/payments/verify`, {
+              razorpay_payment_id: paymentResponse.razorpay_payment_id,
+              razorpay_subscription_id: paymentResponse.razorpay_subscription_id,
+              razorpay_signature: paymentResponse.razorpay_signature,
+              package_id: packageId
+            }, { withCredentials: true });
+
+            toast.success(verifyRes.data.message || 'Subscription activated!');
+            await refreshUser();
+            navigate('/dashboard');
+          } catch (verifyErr) {
+            toast.error(verifyErr.response?.data?.detail || 'Payment verification failed');
+          }
+          setLoading(null);
+        },
+        modal: {
+          ondismiss: function () {
+            setLoading(null);
+          }
+        }
+      };
+
+      if (!window.Razorpay) {
+        toast.error('Payment system is loading. Please try again.');
+        setLoading(null);
+        return;
+      }
+
+      const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', function (response) {
+        toast.error(response.error?.description || 'Payment failed');
+        setLoading(null);
+      });
+      rzp.open();
+
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to start checkout');
       setLoading(null);
@@ -40,7 +102,7 @@ const Pricing = () => {
     {
       id: 'free',
       name: 'Free',
-      price: '$0',
+      price: '₹0',
       period: 'forever',
       icon: Star,
       features: [
@@ -56,7 +118,7 @@ const Pricing = () => {
     {
       id: 'priority',
       name: 'Priority',
-      price: '$9',
+      price: '₹749',
       period: '/month',
       icon: Zap,
       features: [
@@ -72,7 +134,7 @@ const Pricing = () => {
     {
       id: 'pro',
       name: 'Pro',
-      price: '$25',
+      price: '₹2,099',
       period: '/month',
       icon: Crown,
       features: [
@@ -119,7 +181,7 @@ const Pricing = () => {
             </p>
           </motion.div>
 
-          {/* Pricing Cards - 3 columns on desktop */}
+          {/* Pricing Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
             {plans.map((plan, index) => (
               <motion.div
@@ -182,7 +244,7 @@ const Pricing = () => {
           </div>
 
           <p className="text-center text-sm text-[#666666] mt-10">
-            Secure payment powered by Stripe. Cancel anytime.
+            Secure payment powered by Razorpay. Cancel anytime.
           </p>
         </div>
       </div>

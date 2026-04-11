@@ -60,7 +60,7 @@ const Terms = () => {
               </h2>
               <p className="text-[#666666] leading-relaxed">
                 Credits are non-refundable and non-transferable. Prices may change with notice. 
-                All payments are processed securely through Stripe.
+                All payments are processed securely through Razorpay.
               </p>
             </section>
 
