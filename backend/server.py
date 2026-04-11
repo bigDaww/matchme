@@ -1599,6 +1599,7 @@ app.add_middleware(
         "https://matchme-two.vercel.app",
         "https://matchme-gje02qajp-bigdawws-projects.vercel.app",
         "http://localhost:3000",
+        ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
