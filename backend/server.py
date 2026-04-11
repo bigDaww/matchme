@@ -1585,10 +1585,6 @@ async def root():
 @api_router.get("/health")
 async def health():
     return {"status": "ok"}
-
-# Include the router in the main app
-app.include_router(api_router)
-
 # CORS
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://matchme-two.vercel.app")
 app.add_middleware(
@@ -1604,6 +1600,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include the router in the main app
+app.include_router(api_router)
+
+
 
 # ==================== BACKGROUND TASK SCHEDULER ====================
 async def scheduler():
