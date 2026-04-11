@@ -1,3 +1,4 @@
+importlib-resources>=6.0.0
 setuptools>=65.0.0
 pip>=23.0
 fastapi==0.110.1
