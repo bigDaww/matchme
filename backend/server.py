@@ -1594,7 +1594,11 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://matchme-two.vercel.app")
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=[
+        FRONTEND_URL,
+        "https://matchme-two.vercel.app",
+        "https://matchme-gje02qajp-bigdawws-projects.vercel.app",
+        "http://localhost:3000",
     allow_methods=["*"],
     allow_headers=["*"],
 )
