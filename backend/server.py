@@ -1597,9 +1597,10 @@ app.add_middleware(
     allow_origins=[
         FRONTEND_URL,
         "https://matchme-two.vercel.app",
+        "https://matchme-three.vercel.app",
         "https://matchme-gje02qajp-bigdawws-projects.vercel.app",
         "http://localhost:3000",
-        ],
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
