@@ -22,7 +22,9 @@ import resend
 import base64
 import httpx
 from bson import ObjectId
-import stripe
+import razorpay
+import hmac
+import hashlib
 
 # Configure logging
 logging.basicConfig(
@@ -58,8 +60,13 @@ SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "noreply@matchme.app")
 # Anthropic Configuration (for photo moderation)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
-# Stripe Configuration
-stripe.api_key = os.environ.get("STRIPE_API_KEY")
+# Razorpay Configuration
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+razorpay_client = None
+if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+    razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
 # ==================== PHOTO MODERATION ====================
 async def moderate_photo(image_data: bytes, content_type: str) -> dict:
@@ -393,7 +400,12 @@ class RatingSubmit(BaseModel):
 
 class CheckoutRequest(BaseModel):
     package_id: str
-    origin_url: str
+
+class RazorpayVerifyRequest(BaseModel):
+    razorpay_payment_id: str
+    razorpay_subscription_id: str
+    razorpay_signature: str
+    package_id: str
 
 # ==================== AUTH ROUTES ====================
 @api_router.post("/auth/register")
@@ -416,6 +428,8 @@ async def register(data: UserRegister, response: Response):
         "tier": "free",
         "stripe_customer_id": None,
         "stripe_subscription_id": None,
+        "razorpay_subscription_id": None,
+        "razorpay_payment_id": None,
         "subscription_start_date": None,
         "ratings_given": 0,
         "ratings_earned": 0,
@@ -544,6 +558,8 @@ async def google_session(request: Request, response: Response):
             "tier": "free",
             "stripe_customer_id": None,
             "stripe_subscription_id": None,
+            "razorpay_subscription_id": None,
+            "razorpay_payment_id": None,
             "subscription_start_date": None,
             "ratings_given": 0,
             "ratings_earned": 0,
@@ -1316,187 +1332,230 @@ async def trigger_job_worker(request: Request):
     await run_job_worker()
     return {"message": "Job worker executed"}
 
-# ==================== STRIPE SUBSCRIPTIONS ====================
-STRIPE_PRODUCTS = {
+# ==================== RAZORPAY SUBSCRIPTIONS ====================
+RAZORPAY_PRODUCTS = {
     "priority": {
         "name": "Priority",
-        "price": 9.00,
+        "price_inr": 749,  # ₹749/month (~$9)
+        "price_paise": 74900,
         "credits": 12,
+        "period": "monthly",
+        "interval": 1,
     },
     "pro": {
         "name": "Pro",
-        "price": 25.00,
+        "price_inr": 2099,  # ₹2099/month (~$25)
+        "price_paise": 209900,
         "credits": None,  # Unlimited
+        "period": "monthly",
+        "interval": 1,
     }
 }
 
+# Cache for Razorpay plan IDs (created once, reused)
+_razorpay_plan_ids = {}
+
+async def get_or_create_razorpay_plan(package_id: str) -> str:
+    """Get or create a Razorpay plan for a package"""
+    global _razorpay_plan_ids
+    
+    if package_id in _razorpay_plan_ids:
+        return _razorpay_plan_ids[package_id]
+    
+    # Check DB for cached plan ID
+    plan_doc = await db.razorpay_plans.find_one({"package_id": package_id}, {"_id": 0})
+    if plan_doc:
+        _razorpay_plan_ids[package_id] = plan_doc["plan_id"]
+        return plan_doc["plan_id"]
+    
+    # Create new plan in Razorpay
+    product = RAZORPAY_PRODUCTS[package_id]
+    plan_data = {
+        "period": product["period"],
+        "interval": product["interval"],
+        "item": {
+            "name": f"MatchMe {product['name']}",
+            "amount": product["price_paise"],
+            "currency": "INR",
+            "description": f"MatchMe {product['name']} - Monthly Subscription"
+        }
+    }
+    
+    plan = await asyncio.to_thread(razorpay_client.plan.create, data=plan_data)
+    plan_id = plan["id"]
+    
+    # Cache it
+    _razorpay_plan_ids[package_id] = plan_id
+    await db.razorpay_plans.insert_one({
+        "package_id": package_id,
+        "plan_id": plan_id,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    logger.info(f"Created Razorpay plan {plan_id} for {package_id}")
+    return plan_id
+
 @api_router.post("/payments/subscribe")
 async def create_subscription(data: CheckoutRequest, request: Request):
-    """Create a Stripe subscription checkout session"""
+    """Create a Razorpay subscription for checkout"""
     user = await get_current_user(request)
     
-    if data.package_id not in STRIPE_PRODUCTS:
+    if not razorpay_client:
+        logger.error("Razorpay is not configured")
+        raise HTTPException(status_code=500, detail="Payment system not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.")
+    
+    if data.package_id not in RAZORPAY_PRODUCTS:
         raise HTTPException(status_code=400, detail="Invalid package")
     
-    product = STRIPE_PRODUCTS[data.package_id]
-    
-    # Create or get Stripe customer
-    customer_id = user.get("stripe_customer_id")
-    if not customer_id:
-        customer = stripe.Customer.create(
-            email=user["email"],
-            name=user.get("name"),
-            metadata={"user_id": user["user_id"]}
-        )
-        customer_id = customer.id
-        await db.users.update_one(
-            {"user_id": user["user_id"]},
-            {"$set": {"stripe_customer_id": customer_id}}
-        )
-    
-    # Create checkout session for subscription
-    success_url = f"{data.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{data.origin_url}/pricing"
-    
-    session = stripe.checkout.Session.create(
-        customer=customer_id,
-        payment_method_types=["card"],
-        line_items=[{
-            "price_data": {
-                "currency": "usd",
-                "product_data": {
-                    "name": f"MatchMe {product['name']}",
-                    "description": f"${product['price']}/month subscription"
-                },
-                "unit_amount": int(product["price"] * 100),
-                "recurring": {"interval": "month"}
-            },
-            "quantity": 1
-        }],
-        mode="subscription",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "user_id": user["user_id"],
-            "package_id": data.package_id
-        }
-    )
-    
-    return {"url": session.url, "session_id": session.id}
-
-@api_router.get("/payments/status/{session_id}")
-async def get_payment_status(session_id: str, request: Request):
-    user = await get_current_user(request)
-    
     try:
-        session = stripe.checkout.Session.retrieve(session_id)
+        # Get or create the plan
+        plan_id = await get_or_create_razorpay_plan(data.package_id)
         
-        if session.payment_status == "paid" or session.status == "complete":
-            # Get subscription details
-            subscription_id = session.subscription
-            package_id = session.metadata.get("package_id")
-            
-            if subscription_id and package_id:
-                # Update user tier and credits
-                update_fields = {"tier": package_id, "stripe_subscription_id": subscription_id}
-                
-                if package_id == "priority":
-                    update_fields["credits"] = STRIPE_PRODUCTS["priority"]["credits"]
-                    update_fields["subscription_start_date"] = datetime.now(timezone.utc).isoformat()
-                
-                await db.users.update_one(
-                    {"user_id": user["user_id"]},
-                    {"$set": update_fields}
-                )
+        # Create subscription
+        sub_data = {
+            "plan_id": plan_id,
+            "customer_notify": 1,
+            "total_count": 12,  # 12 billing cycles max
+            "notes": {
+                "user_id": user["user_id"],
+                "package_id": data.package_id
+            }
+        }
+        
+        subscription = await asyncio.to_thread(razorpay_client.subscription.create, data=sub_data)
         
         return {
-            "session_id": session_id,
-            "status": session.status,
-            "payment_status": session.payment_status,
-            "subscription_id": session.subscription
+            "subscription_id": subscription["id"],
+            "razorpay_key_id": RAZORPAY_KEY_ID,
+            "amount": RAZORPAY_PRODUCTS[data.package_id]["price_paise"],
+            "currency": "INR",
+            "name": f"MatchMe {RAZORPAY_PRODUCTS[data.package_id]['name']}",
+            "description": f"MatchMe {RAZORPAY_PRODUCTS[data.package_id]['name']} Monthly Subscription",
+            "prefill": {
+                "name": user.get("name", ""),
+                "email": user.get("email", "")
+            }
         }
-    except Exception as e:
-        logger.error(f"Error checking payment status: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-@api_router.post("/webhook/stripe")
-async def stripe_webhook(request: Request):
-    """Handle Stripe webhooks for subscriptions"""
-    body = await request.body()
-    signature = request.headers.get("Stripe-Signature")
     
-    # For now, process without signature verification (add webhook secret in production)
-    try:
-        payload = body.decode("utf-8")
-        event = stripe.Event.construct_from(
-            stripe.util.convert_to_dict(stripe.util.json.loads(payload)),
-            stripe.api_key
-        )
     except Exception as e:
-        logger.error(f"Webhook parsing error: {e}")
+        logger.error(f"Razorpay subscription error: {e}")
+        raise HTTPException(status_code=500, detail=f"Payment error: {str(e)}")
+
+@api_router.post("/payments/verify")
+async def verify_payment(data: RazorpayVerifyRequest, request: Request):
+    """Verify Razorpay payment signature and activate subscription"""
+    user = await get_current_user(request)
+    
+    if not razorpay_client:
+        raise HTTPException(status_code=500, detail="Payment system not configured")
+    
+    try:
+        # Verify the payment signature
+        params_dict = {
+            "razorpay_payment_id": data.razorpay_payment_id,
+            "razorpay_subscription_id": data.razorpay_subscription_id,
+            "razorpay_signature": data.razorpay_signature
+        }
+        
+        await asyncio.to_thread(
+            razorpay_client.utility.verify_payment_signature, params_dict
+        )
+        
+        # Signature verified — activate the subscription
+        package_id = data.package_id
+        if package_id not in RAZORPAY_PRODUCTS:
+            raise HTTPException(status_code=400, detail="Invalid package")
+        
+        update_fields = {
+            "tier": package_id,
+            "razorpay_subscription_id": data.razorpay_subscription_id,
+            "razorpay_payment_id": data.razorpay_payment_id,
+            "subscription_start_date": datetime.now(timezone.utc).isoformat()
+        }
+        
+        if package_id == "priority":
+            update_fields["credits"] = RAZORPAY_PRODUCTS["priority"]["credits"]
+        
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": update_fields}
+        )
+        
+        logger.info(f"Subscription activated for {user['user_id']}: {package_id}")
+        
+        return {
+            "status": "success",
+            "tier": package_id,
+            "message": f"Welcome to MatchMe {RAZORPAY_PRODUCTS[package_id]['name']}!"
+        }
+    
+    except razorpay.errors.SignatureVerificationError:
+        logger.error(f"Payment signature verification failed for user {user['user_id']}")
+        raise HTTPException(status_code=400, detail="Payment verification failed. Please contact support.")
+    except Exception as e:
+        logger.error(f"Payment verification error: {e}")
+        raise HTTPException(status_code=500, detail=f"Payment verification error: {str(e)}")
+
+@api_router.post("/webhook/razorpay")
+async def razorpay_webhook(request: Request):
+    """Handle Razorpay webhooks for subscription events"""
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    
+    # Verify webhook signature if secret is set
+    if RAZORPAY_WEBHOOK_SECRET:
+        try:
+            await asyncio.to_thread(
+                razorpay_client.utility.verify_webhook_signature,
+                body.decode("utf-8"), signature, RAZORPAY_WEBHOOK_SECRET
+            )
+        except Exception as e:
+            logger.error(f"Webhook signature verification failed: {e}")
+            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+    
+    import json as _json
+    try:
+        payload = _json.loads(body)
+    except Exception:
         raise HTTPException(status_code=400, detail="Invalid payload")
     
-    event_type = event.type
-    data = event.data.object
+    event = payload.get("event", "")
+    payment_entity = payload.get("payload", {})
     
-    logger.info(f"Stripe webhook: {event_type}")
+    logger.info(f"Razorpay webhook: {event}")
     
-    if event_type == "customer.subscription.created":
-        # Subscription created - activate tier
-        customer_id = data.customer
-        subscription_id = data.id
+    if event == "subscription.charged":
+        # Recurring payment successful — renew credits for Priority
+        sub_entity = payment_entity.get("subscription", {}).get("entity", {})
+        subscription_id = sub_entity.get("id")
         
-        user = await db.users.find_one({"stripe_customer_id": customer_id}, {"_id": 0})
-        if user:
-            # Determine tier from subscription price
-            amount = data.items.data[0].price.unit_amount / 100
-            tier = "priority" if amount == 9 else "pro" if amount == 25 else "free"
-            
-            update_fields = {
-                "tier": tier,
-                "stripe_subscription_id": subscription_id,
-                "subscription_start_date": datetime.now(timezone.utc).isoformat()
-            }
-            
-            if tier == "priority":
-                update_fields["credits"] = STRIPE_PRODUCTS["priority"]["credits"]
-            
-            await db.users.update_one(
-                {"user_id": user["user_id"]},
-                {"$set": update_fields}
-            )
-            logger.info(f"Subscription created for {user['user_id']}: {tier}")
+        if subscription_id:
+            user = await db.users.find_one({"razorpay_subscription_id": subscription_id}, {"_id": 0})
+            if user and user.get("tier") == "priority":
+                await db.users.update_one(
+                    {"user_id": user["user_id"]},
+                    {"$set": {
+                        "credits": RAZORPAY_PRODUCTS["priority"]["credits"],
+                        "subscription_start_date": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                logger.info(f"Priority credits renewed for {user['user_id']}")
     
-    elif event_type == "invoice.paid":
-        # Subscription renewed - reset credits for Priority
-        subscription_id = data.subscription
+    elif event in ("subscription.cancelled", "subscription.completed"):
+        sub_entity = payment_entity.get("subscription", {}).get("entity", {})
+        subscription_id = sub_entity.get("id")
         
-        user = await db.users.find_one({"stripe_subscription_id": subscription_id}, {"_id": 0})
-        if user and user.get("tier") == "priority":
-            await db.users.update_one(
-                {"user_id": user["user_id"]},
-                {"$set": {
-                    "credits": STRIPE_PRODUCTS["priority"]["credits"],
-                    "subscription_start_date": datetime.now(timezone.utc).isoformat()
-                }}
-            )
-            logger.info(f"Priority credits reset for {user['user_id']}")
-    
-    elif event_type == "customer.subscription.deleted":
-        # Subscription cancelled - downgrade to free
-        subscription_id = data.id
-        
-        user = await db.users.find_one({"stripe_subscription_id": subscription_id}, {"_id": 0})
-        if user:
-            # Keep remaining credits for Priority users
-            await db.users.update_one(
-                {"user_id": user["user_id"]},
-                {"$set": {
-                    "tier": "free",
-                    "stripe_subscription_id": None
-                }}
-            )
-            logger.info(f"Subscription cancelled for {user['user_id']}, downgraded to free")
+        if subscription_id:
+            user = await db.users.find_one({"razorpay_subscription_id": subscription_id}, {"_id": 0})
+            if user:
+                await db.users.update_one(
+                    {"user_id": user["user_id"]},
+                    {"$set": {
+                        "tier": "free",
+                        "razorpay_subscription_id": None
+                    }}
+                )
+                logger.info(f"Subscription ended for {user['user_id']}, downgraded to free")
     
     return {"received": True}
 
@@ -1505,17 +1564,19 @@ async def cancel_subscription(request: Request):
     """Cancel user's subscription"""
     user = await get_current_user(request)
     
-    subscription_id = user.get("stripe_subscription_id")
+    subscription_id = user.get("razorpay_subscription_id")
     if not subscription_id:
         raise HTTPException(status_code=400, detail="No active subscription")
     
     try:
-        stripe.Subscription.delete(subscription_id)
+        await asyncio.to_thread(
+            razorpay_client.subscription.cancel, subscription_id
+        )
         
-        # Update user (webhook will also fire, but update immediately for UX)
+        # Update user immediately for UX (webhook will also fire)
         await db.users.update_one(
             {"user_id": user["user_id"]},
-            {"$set": {"tier": "free", "stripe_subscription_id": None}}
+            {"$set": {"tier": "free", "razorpay_subscription_id": None}}
         )
         
         return {"message": "Subscription cancelled"}
@@ -1626,7 +1687,7 @@ async def startup():
         # Create indexes
         await db.users.create_index("email", unique=True)
         await db.users.create_index("user_id", unique=True)
-        await db.users.create_index("stripe_customer_id", sparse=True)
+        await db.users.create_index("razorpay_subscription_id", sparse=True)
         await db.photos.create_index("user_id")
         await db.photos.create_index("photo_id", unique=True)
         await db.jobs.create_index("user_id")
@@ -1655,6 +1716,8 @@ async def startup():
                 "tier": "pro",
                 "stripe_customer_id": None,
                 "stripe_subscription_id": None,
+                "razorpay_subscription_id": None,
+                "razorpay_payment_id": None,
                 "ratings_given": 0,
                 "ratings_earned": 0,
                 "onboarding_completed": True,
@@ -1672,7 +1735,10 @@ async def startup():
     
     logger.info("Cloudinary configured")
     logger.info("Resend email configured")
-    logger.info("Stripe configured")
+    if razorpay_client:
+        logger.info(f"Razorpay configured (key: {RAZORPAY_KEY_ID[:12]}...)")
+    else:
+        logger.warning("⚠️  RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET not set — payments will fail!")
     
     # Write test credentials
     os.makedirs("memory", exist_ok=True)
