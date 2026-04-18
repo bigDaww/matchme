@@ -643,8 +643,8 @@ async def create_best_shot_job(data: JobCreate, request: Request):
 async def create_profile_analysis_job(data: JobCreate, request: Request):
     user = await get_current_user(request)
     
-    if len(data.photo_ids) < 1 or len(data.photo_ids) > 3:
-        raise HTTPException(status_code=400, detail="Upload 1-3 photos")
+    if len(data.photo_ids) < 4 or len(data.photo_ids) > 6:
+        raise HTTPException(status_code=400, detail="Upload 4-6 photos")
     
     if not check_credits(user, PROFILE_ANALYSIS_COST):
         raise HTTPException(status_code=400, detail="Not enough credits (need 2)")
