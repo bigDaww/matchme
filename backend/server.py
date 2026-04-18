@@ -20,8 +20,7 @@ import cloudinary.uploader
 import cloudinary.utils
 import resend
 from bson import ObjectId
-from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutSessionRequest
-import stripe
+
 
 # Configure logging
 logging.basicConfig(
