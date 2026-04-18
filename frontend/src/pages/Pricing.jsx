@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Check, Star, Zap, Crown } from 'lucide-react';
+import { ArrowLeft, Check, Star, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { useAuth, API } from '../App';
@@ -108,7 +108,7 @@ const Pricing = () => {
       features: [
         '3 free credits on signup',
         'Earn credits by rating others',
-        'Results within 24 hours',
+        'Results as soon as 1 person reviews',
         'Reviewed by 3 real people'
       ],
       cta: user ? 'Current Plan' : 'Get Started',
@@ -130,23 +130,6 @@ const Pricing = () => {
       cta: user?.tier === 'priority' ? 'Current Plan' : 'Subscribe',
       disabled: user?.tier === 'priority',
       highlight: true
-    },
-    {
-      id: 'pro',
-      name: 'Pro',
-      price: '₹2,099',
-      period: '/month',
-      icon: Crown,
-      features: [
-        'Unlimited uploads per day',
-        'No credit system',
-        'Results in 2–4 hours',
-        'Reviewed by 10+ real people',
-        'Best for serious daters'
-      ],
-      cta: user?.tier === 'pro' ? 'Current Plan' : 'Go Pro',
-      disabled: user?.tier === 'pro',
-      highlight: false
     }
   ];
 
@@ -182,7 +165,7 @@ const Pricing = () => {
           </motion.div>
 
           {/* Pricing Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8 max-w-3xl mx-auto">
             {plans.map((plan, index) => (
               <motion.div
                 key={plan.id}
