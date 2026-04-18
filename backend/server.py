@@ -1251,44 +1251,6 @@ async def startup():
     
     logger.info("Cloudinary configured")
     logger.info("Resend email configured")
-    
-    # Write test credentials
-    os.makedirs("/app/memory", exist_ok=True)
-    with open("/app/memory/test_credentials.md", "w") as f:
-        f.write(f"""# Test Credentials
-
-## Admin Account
-- Email: admin@matchme.com
-- Password: AdminMatch2024!
-- Role: admin
-- Tier: Priority (with 999 credits)
-
-## Tier Structure (UPDATED)
-- **Free**: Reviews shown immediately, 3 credits on signup, earn 1 credit per 3 reviews (changed from 5)
-- **Priority ($9/mo)**: 10 ratings minimum (changed from 7), 4hrs timeout, 15 credits/month (changed from 12)
-- **Pro tier removed**
-
-## Credit Costs
-- Best Shot: 1 credit
-- Profile Analysis: 2 credits
-
-## Credit Earning
-- Free users: Earn 1 credit for every 3 profile reviews (changed from 5)
-- Daily limit: 10 credits max (changed from 5)
-
-## Background Worker
-- Runs every 15 minutes
-- Free users: Results shown as soon as 1 review arrives (immediate feedback)
-- Priority users: Results shown after 10 reviews OR 4 hours
-- Awards bonus credits to raters on job completion
-
-## API Endpoints
-- POST /api/auth/register
-- POST /api/auth/login
-- POST /api/payments/subscribe (subscriptions)
-- POST /api/admin/run-worker (manual worker trigger)
-""")
-    logger.info("Test credentials written")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
