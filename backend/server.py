@@ -21,7 +21,6 @@ import cloudinary.utils
 import resend
 from bson import ObjectId
 
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -56,9 +55,6 @@ cloudinary.config(
 # Resend Configuration
 resend.api_key = os.environ.get("RESEND_API_KEY")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "noreply@matchme.app")
-
-# Stripe Configuration
-stripe.api_key = os.environ.get("STRIPE_API_KEY")
 
 # ==================== TIER CONFIGURATION ====================
 TIER_CONFIG = {
@@ -304,10 +300,6 @@ class RatingSubmit(BaseModel):
     tags: List[str] = []
     comment: str
 
-class CheckoutRequest(BaseModel):
-    package_id: str
-    origin_url: str
-
 # ==================== AUTH ROUTES ====================
 @api_router.post("/auth/register")
 async def register(data: UserRegister, response: Response):
@@ -327,8 +319,6 @@ async def register(data: UserRegister, response: Response):
         "orientation": None,
         "dating_app": None,
         "tier": "free",
-        "stripe_customer_id": None,
-        "stripe_subscription_id": None,
         "subscription_start_date": None,
         "ratings_given": 0,
         "ratings_earned": 0,
@@ -455,8 +445,6 @@ async def google_session(request: Request, response: Response):
             "orientation": None,
             "dating_app": None,
             "tier": "free",
-            "stripe_customer_id": None,
-            "stripe_subscription_id": None,
             "subscription_start_date": None,
             "ratings_given": 0,
             "ratings_earned": 0,
@@ -642,8 +630,8 @@ async def create_best_shot_job(data: JobCreate, request: Request):
 async def create_profile_analysis_job(data: JobCreate, request: Request):
     user = await get_current_user(request)
     
-    if len(data.photo_ids) < 1 or len(data.photo_ids) > 3:
-        raise HTTPException(status_code=400, detail="Upload 1-3 photos")
+    if len(data.photo_ids) < 4 or len(data.photo_ids) > 6:
+        raise HTTPException(status_code=400, detail="Upload 4-6 photos")
     
     if not check_credits(user, PROFILE_ANALYSIS_COST):
         raise HTTPException(status_code=400, detail="Not enough credits (need 2)")
@@ -1178,208 +1166,6 @@ async def trigger_job_worker(request: Request):
     await run_job_worker()
     return {"message": "Job worker executed"}
 
-# ==================== STRIPE SUBSCRIPTIONS ====================
-STRIPE_PRODUCTS = {
-    "priority": {
-        "name": "Priority",
-        "price": 9.00,
-        "credits": 15,  # Updated from 12 to 15
-    }
-}
-
-@api_router.post("/payments/subscribe")
-async def create_subscription(data: CheckoutRequest, request: Request):
-    """Create a Stripe subscription checkout session"""
-    user = await get_current_user(request)
-    
-    if data.package_id not in STRIPE_PRODUCTS:
-        raise HTTPException(status_code=400, detail="Invalid package")
-    
-    product = STRIPE_PRODUCTS[data.package_id]
-    
-    # Create or get Stripe customer
-    customer_id = user.get("stripe_customer_id")
-    if not customer_id:
-        customer = stripe.Customer.create(
-            email=user["email"],
-            name=user.get("name"),
-            metadata={"user_id": user["user_id"]}
-        )
-        customer_id = customer.id
-        await db.users.update_one(
-            {"user_id": user["user_id"]},
-            {"$set": {"stripe_customer_id": customer_id}}
-        )
-    
-    # Create checkout session for subscription
-    success_url = f"{data.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{data.origin_url}/pricing"
-    
-    session = stripe.checkout.Session.create(
-        customer=customer_id,
-        payment_method_types=["card"],
-        line_items=[{
-            "price_data": {
-                "currency": "usd",
-                "product_data": {
-                    "name": f"MatchMe {product['name']}",
-                    "description": f"${product['price']}/month subscription"
-                },
-                "unit_amount": int(product["price"] * 100),
-                "recurring": {"interval": "month"}
-            },
-            "quantity": 1
-        }],
-        mode="subscription",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "user_id": user["user_id"],
-            "package_id": data.package_id
-        }
-    )
-    
-    return {"url": session.url, "session_id": session.id}
-
-@api_router.get("/payments/status/{session_id}")
-async def get_payment_status(session_id: str, request: Request):
-    user = await get_current_user(request)
-    
-    try:
-        session = stripe.checkout.Session.retrieve(session_id)
-        
-        if session.payment_status == "paid" or session.status == "complete":
-            # Get subscription details
-            subscription_id = session.subscription
-            package_id = session.metadata.get("package_id")
-            
-            if subscription_id and package_id:
-                # Update user tier and credits
-                update_fields = {"tier": package_id, "stripe_subscription_id": subscription_id}
-                
-                if package_id == "priority":
-                    update_fields["credits"] = STRIPE_PRODUCTS["priority"]["credits"]
-                    update_fields["subscription_start_date"] = datetime.now(timezone.utc).isoformat()
-                
-                await db.users.update_one(
-                    {"user_id": user["user_id"]},
-                    {"$set": update_fields}
-                )
-        
-        return {
-            "session_id": session_id,
-            "status": session.status,
-            "payment_status": session.payment_status,
-            "subscription_id": session.subscription
-        }
-    except Exception as e:
-        logger.error(f"Error checking payment status: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-@api_router.post("/webhook/stripe")
-async def stripe_webhook(request: Request):
-    """Handle Stripe webhooks for subscriptions"""
-    body = await request.body()
-    signature = request.headers.get("Stripe-Signature")
-    
-    # For now, process without signature verification (add webhook secret in production)
-    try:
-        payload = body.decode("utf-8")
-        event = stripe.Event.construct_from(
-            stripe.util.convert_to_dict(stripe.util.json.loads(payload)),
-            stripe.api_key
-        )
-    except Exception as e:
-        logger.error(f"Webhook parsing error: {e}")
-        raise HTTPException(status_code=400, detail="Invalid payload")
-    
-    event_type = event.type
-    data = event.data.object
-    
-    logger.info(f"Stripe webhook: {event_type}")
-    
-    if event_type == "customer.subscription.created":
-        # Subscription created - activate tier
-        customer_id = data.customer
-        subscription_id = data.id
-        
-        user = await db.users.find_one({"stripe_customer_id": customer_id}, {"_id": 0})
-        if user:
-            # Only Priority tier available now
-            amount = data.items.data[0].price.unit_amount / 100
-            tier = "priority" if amount == 9 else "free"
-            
-            update_fields = {
-                "tier": tier,
-                "stripe_subscription_id": subscription_id,
-                "subscription_start_date": datetime.now(timezone.utc).isoformat()
-            }
-            
-            if tier == "priority":
-                update_fields["credits"] = STRIPE_PRODUCTS["priority"]["credits"]
-            
-            await db.users.update_one(
-                {"user_id": user["user_id"]},
-                {"$set": update_fields}
-            )
-            logger.info(f"Subscription created for {user['user_id']}: {tier}")
-    
-    elif event_type == "invoice.paid":
-        # Subscription renewed - reset credits for Priority
-        subscription_id = data.subscription
-        
-        user = await db.users.find_one({"stripe_subscription_id": subscription_id}, {"_id": 0})
-        if user and user.get("tier") == "priority":
-            await db.users.update_one(
-                {"user_id": user["user_id"]},
-                {"$set": {
-                    "credits": STRIPE_PRODUCTS["priority"]["credits"],
-                    "subscription_start_date": datetime.now(timezone.utc).isoformat()
-                }}
-            )
-            logger.info(f"Priority credits reset for {user['user_id']}")
-    
-    elif event_type == "customer.subscription.deleted":
-        # Subscription cancelled - downgrade to free
-        subscription_id = data.id
-        
-        user = await db.users.find_one({"stripe_subscription_id": subscription_id}, {"_id": 0})
-        if user:
-            # Keep remaining credits for Priority users
-            await db.users.update_one(
-                {"user_id": user["user_id"]},
-                {"$set": {
-                    "tier": "free",
-                    "stripe_subscription_id": None
-                }}
-            )
-            logger.info(f"Subscription cancelled for {user['user_id']}, downgraded to free")
-    
-    return {"received": True}
-
-@api_router.post("/payments/cancel-subscription")
-async def cancel_subscription(request: Request):
-    """Cancel user's subscription"""
-    user = await get_current_user(request)
-    
-    subscription_id = user.get("stripe_subscription_id")
-    if not subscription_id:
-        raise HTTPException(status_code=400, detail="No active subscription")
-    
-    try:
-        stripe.Subscription.delete(subscription_id)
-        
-        # Update user (webhook will also fire, but update immediately for UX)
-        await db.users.update_one(
-            {"user_id": user["user_id"]},
-            {"$set": {"tier": "free", "stripe_subscription_id": None}}
-        )
-        
-        return {"message": "Subscription cancelled"}
-    except Exception as e:
-        logger.error(f"Error cancelling subscription: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
 # ==================== HEALTH CHECK ====================
 @api_router.get("/")
 async def root():
@@ -1422,7 +1208,6 @@ async def startup():
         # Create indexes
         await db.users.create_index("email", unique=True)
         await db.users.create_index("user_id", unique=True)
-        await db.users.create_index("stripe_customer_id", sparse=True)
         await db.photos.create_index("user_id")
         await db.photos.create_index("photo_id", unique=True)
         await db.jobs.create_index("user_id")
@@ -1449,8 +1234,6 @@ async def startup():
                 "orientation": None,
                 "dating_app": None,
                 "tier": "priority",  # Admin now gets priority tier (no pro tier)
-                "stripe_customer_id": None,
-                "stripe_subscription_id": None,
                 "ratings_given": 0,
                 "ratings_earned": 0,
                 "onboarding_completed": True,
@@ -1468,7 +1251,6 @@ async def startup():
     
     logger.info("Cloudinary configured")
     logger.info("Resend email configured")
-    logger.info("Stripe configured")
     
     # Write test credentials
     os.makedirs("/app/memory", exist_ok=True)
