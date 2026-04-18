@@ -22,8 +22,8 @@ const ProfileAnalysis = () => {
       ['image/jpeg', 'image/png', 'image/jpg'].includes(f.type) && f.size <= 10 * 1024 * 1024
     );
 
-    if (validFiles.length + photos.length > 6) {
-      toast.error('Maximum 6 photos allowed');
+    if (validFiles.length + photos.length > 3) {
+      toast.error('Maximum 3 photos allowed');
       return;
     }
 
@@ -63,8 +63,8 @@ const ProfileAnalysis = () => {
   };
 
   const handleSubmit = async () => {
-    if (photos.length < 4) {
-      toast.error('Upload at least 4 photos');
+    if (photos.length < 1) {
+      toast.error('Upload at least 1 photo');
       return;
     }
 
@@ -116,14 +116,14 @@ const ProfileAnalysis = () => {
               animate={{ opacity: 1, y: 0 }}
             >
               <p className="text-[#666666] text-center lg:text-left mb-6 max-w-2xl">
-                Upload 4-6 photos plus your bio for a complete profile review.
+                Upload 1-3 photos plus your bio for a complete profile review.
               </p>
 
               <div className="two-col-layout">
                 {/* Left Column - Photos */}
                 <div className="col-left">
                   {/* Drop Zone */}
-                  {photos.length < 6 && (
+                  {photos.length < 3 && (
                     <div
                       className={`drop-zone mb-6 ${dragOver ? 'dragging' : ''}`}
                       onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -180,7 +180,7 @@ const ProfileAnalysis = () => {
                   )}
 
                   <p className="text-center lg:text-left text-sm text-[#666666] mb-6">
-                    {photos.length}/6 photos • Need at least 4
+                    {photos.length}/3 photos • Need at least 1
                   </p>
                 </div>
 
@@ -238,9 +238,9 @@ const ProfileAnalysis = () => {
                     {/* Submit Button */}
                     <button
                       onClick={handleSubmit}
-                      disabled={photos.length < 4 || submitting}
+                      disabled={photos.length < 1 || submitting}
                       className={`btn-pill w-full ${
-                        photos.length >= 4 ? 'btn-primary' : 'btn-secondary opacity-50'
+                        photos.length >= 1 ? 'btn-primary' : 'btn-secondary opacity-50'
                       }`}
                       data-testid="submit-btn"
                     >
