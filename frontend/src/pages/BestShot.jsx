@@ -20,8 +20,8 @@ const BestShot = () => {
       ['image/jpeg', 'image/png', 'image/jpg'].includes(f.type) && f.size <= 10 * 1024 * 1024
     );
 
-    if (validFiles.length + photos.length > 10) {
-      toast.error('Maximum 10 photos allowed');
+    if (validFiles.length + photos.length > 3) {
+      toast.error('Maximum 3 photos allowed');
       return;
     }
 
@@ -61,8 +61,8 @@ const BestShot = () => {
   };
 
   const handleSubmit = async () => {
-    if (photos.length < 3) {
-      toast.error('Upload at least 3 photos');
+    if (photos.length < 1) {
+      toast.error('Upload at least 1 photo');
       return;
     }
 
@@ -112,14 +112,14 @@ const BestShot = () => {
               animate={{ opacity: 1, y: 0 }}
             >
               <p className="text-[#666666] text-center lg:text-left mb-6 max-w-2xl">
-                Upload 3-10 photos and real people will tell you which one makes the best first impression.
+                Upload 1-3 photos and real people will tell you which one makes the best first impression.
               </p>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 {/* Upload Section */}
                 <div className="lg:col-span-2">
                   {/* Drop Zone */}
-                  {photos.length < 10 && (
+                  {photos.length < 3 && (
                     <div
                       className={`drop-zone mb-6 ${dragOver ? 'dragging' : ''}`}
                       onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -196,8 +196,8 @@ const BestShot = () => {
                     
                     {/* Photo Count */}
                     <p className="text-sm text-[#666666] mb-4">
-                      {photos.length}/10 photos uploaded
-                      {photos.length < 3 && <span className="block text-[#E5533C]">Need at least 3</span>}
+                      {photos.length}/3 photos uploaded
+                      {photos.length < 1 && <span className="block text-[#E5533C]">Upload at least 1</span>}
                     </p>
 
                     {user?.tier !== 'pro' && (
@@ -221,9 +221,9 @@ const BestShot = () => {
                     {/* Submit Button */}
                     <button
                       onClick={handleSubmit}
-                      disabled={photos.length < 3 || submitting}
+                      disabled={photos.length < 1 || submitting}
                       className={`btn-pill w-full ${
-                        photos.length >= 3 ? 'btn-primary' : 'btn-secondary opacity-50'
+                        photos.length >= 1 ? 'btn-primary' : 'btn-secondary opacity-50'
                       }`}
                       data-testid="submit-btn"
                     >
