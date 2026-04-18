@@ -19,12 +19,9 @@ import cloudinary
 import cloudinary.uploader
 import cloudinary.utils
 import resend
-import base64
-import httpx
 from bson import ObjectId
-import razorpay
-import hmac
-import hashlib
+from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutSessionRequest
+import stripe
 
 # Configure logging
 logging.basicConfig(
@@ -38,7 +35,11 @@ ROOT_DIR = Path(__file__).parent
 # MongoDB connection
 import certifi
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
+# Only use SSL/TLS for MongoDB Atlas connections
+if 'mongodb.net' in mongo_url or 'mongodb+srv' in mongo_url:
+    client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
+else:
+    client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # JWT Configuration
@@ -57,122 +58,28 @@ cloudinary.config(
 resend.api_key = os.environ.get("RESEND_API_KEY")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "noreply@matchme.app")
 
-# Anthropic Configuration (for photo moderation)
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-
-# Razorpay Configuration
-RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
-RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
-razorpay_client = None
-if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
-    razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-
-# ==================== PHOTO MODERATION ====================
-async def moderate_photo(image_data: bytes, content_type: str) -> dict:
-    """
-    Use Claude vision to check if a photo is safe for the platform.
-    Returns {"safe": bool, "reason": str}
-    """
-    if not ANTHROPIC_API_KEY:
-        logger.warning("ANTHROPIC_API_KEY not set — skipping moderation")
-        return {"safe": True, "reason": "moderation_skipped"}
-
-    try:
-        media_type = content_type if content_type in ["image/jpeg", "image/png", "image/gif", "image/webp"] else "image/jpeg"
-        image_b64 = base64.standard_b64encode(image_data).decode("utf-8")
-
-        payload = {
-            "model": "claude-opus-4-5",
-            "max_tokens": 100,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": image_b64
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "You are a content moderator for a dating profile review app. "
-                                "Analyze this photo and respond with ONLY a JSON object like: "
-                                "{\"safe\": true} or {\"safe\": false, \"reason\": \"brief reason\"}. "
-                                "Flag as unsafe ONLY if the image contains: explicit nudity or sexual content, "
-                                "graphic violence or gore, or content that is clearly not a person/profile photo "
-                                "(e.g. genitalia, explicit acts). "
-                                "Normal swimwear, shirtless photos, and tasteful images are SAFE. "
-                                "Do not flag based on attractiveness, age appearance, or race. "
-                                "Respond with only the JSON, nothing else."
-                            )
-                        }
-                    ]
-                }
-            ]
-        }
-
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
-                },
-                json=payload
-            )
-            resp.raise_for_status()
-            result = resp.json()
-
-        text = result["content"][0]["text"].strip()
-        # Strip markdown fences if present
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        import json as _json
-        moderation = _json.loads(text)
-        logger.info(f"Moderation result: {moderation}")
-        return moderation
-
-    except Exception as e:
-        logger.error(f"Moderation error: {e}")
-        # Fail open — don't block uploads if moderation is down
-        return {"safe": True, "reason": "moderation_error"}
+# Stripe Configuration
+stripe.api_key = os.environ.get("STRIPE_API_KEY")
 
 # ==================== TIER CONFIGURATION ====================
 TIER_CONFIG = {
     "free": {
-        "min_ratings": 3,
-        "time_cap_hours": 24,
-        "low_confidence_min": 2,
-        "extension_hours": 12,
+        "min_ratings": 1,  # Show results immediately as reviews arrive
+        "time_cap_hours": 48,  # Extended time cap for free users
+        "low_confidence_min": 1,  # Accept even 1 review
+        "extension_hours": 24,
         "credits_per_month": None,  # Not subscription-based
         "signup_credits": 3,
-        "ratings_for_credit": 5,
-        "max_daily_earned_credits": 5,
+        "ratings_for_credit": 3,  # Earn 1 credit per 3 reviews (changed from 5)
+        "max_daily_earned_credits": 10,  # Increased daily limit
     },
     "priority": {
-        "min_ratings": 7,
+        "min_ratings": 10,  # Get reviewed by 10 people (changed from 7)
         "time_cap_hours": 4,
-        "low_confidence_min": 4,
+        "low_confidence_min": 5,
         "extension_hours": 2,
-        "credits_per_month": 12,
+        "credits_per_month": 15,  # 15 credits per month (changed from 12)
         "price_monthly": 9.00,
-    },
-    "pro": {
-        "min_ratings": 10,
-        "time_cap_hours": 4,
-        "low_confidence_min": 6,
-        "extension_hours": 2,
-        "credits_per_month": None,  # Unlimited - no credit system
-        "price_monthly": 25.00,
-        "unlimited": True,
     }
 }
 
@@ -400,12 +307,7 @@ class RatingSubmit(BaseModel):
 
 class CheckoutRequest(BaseModel):
     package_id: str
-
-class RazorpayVerifyRequest(BaseModel):
-    razorpay_payment_id: str
-    razorpay_subscription_id: str
-    razorpay_signature: str
-    package_id: str
+    origin_url: str
 
 # ==================== AUTH ROUTES ====================
 @api_router.post("/auth/register")
@@ -428,8 +330,6 @@ async def register(data: UserRegister, response: Response):
         "tier": "free",
         "stripe_customer_id": None,
         "stripe_subscription_id": None,
-        "razorpay_subscription_id": None,
-        "razorpay_payment_id": None,
         "subscription_start_date": None,
         "ratings_given": 0,
         "ratings_earned": 0,
@@ -558,8 +458,6 @@ async def google_session(request: Request, response: Response):
             "tier": "free",
             "stripe_customer_id": None,
             "stripe_subscription_id": None,
-            "razorpay_subscription_id": None,
-            "razorpay_payment_id": None,
             "subscription_start_date": None,
             "ratings_given": 0,
             "ratings_earned": 0,
@@ -608,26 +506,16 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     """Direct upload to Cloudinary from backend"""
     user = await get_current_user(request)
     
-    # Validate file type
-    allowed_types = ["image/jpeg", "image/png", "image/jpg"]
+    # Validate file type - Added HEIC support
+    allowed_types = ["image/jpeg", "image/png", "image/jpg", "image/heic", "image/heif"]
     if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="Only JPG/PNG images allowed")
+        raise HTTPException(status_code=400, detail="Only JPG/PNG/HEIC images allowed")
     
     # Read file (max 10MB)
     data = await file.read()
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 10MB)")
     
-    # ---- MODERATION CHECK ----
-    moderation = await moderate_photo(data, file.content_type)
-    if not moderation.get("safe", True):
-        reason = moderation.get("reason", "inappropriate content")
-        logger.warning(f"Photo blocked by moderation for user {user['user_id']}: {reason}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Photo rejected: {reason}. Please upload an appropriate profile photo."
-        )
-
     photo_id = str(uuid.uuid4())
     folder = f"matchme/users/{user['user_id']}/photos"
     
@@ -655,8 +543,6 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         "height": result.get("height"),
         "size": result.get("bytes"),
         "is_deleted": False,
-        "report_count": 0,
-        "moderation_passed": True,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.photos.insert_one(photo_doc)
@@ -707,15 +593,13 @@ async def get_user_photos(request: Request):
 
 # ==================== JOBS ====================
 def check_credits(user: dict, cost: int) -> bool:
-    """Check if user has enough credits (Pro users always pass)"""
-    if user.get("tier") == "pro":
-        return True  # Pro users have no credit system
+    """Check if user has enough credits"""
+    # All users now use credit system (Pro tier removed)
     return user.get("credits", 0) >= cost
 
 async def deduct_credits(user_id: str, amount: int, tier: str):
-    """Deduct credits from user (skip for Pro users)"""
-    if tier == "pro":
-        return  # Pro users have no credit system
+    """Deduct credits from user"""
+    # All users now use credit system (Pro tier removed)
     await db.users.update_one(
         {"user_id": user_id},
         {"$inc": {"credits": -amount}}
@@ -725,8 +609,8 @@ async def deduct_credits(user_id: str, amount: int, tier: str):
 async def create_best_shot_job(data: JobCreate, request: Request):
     user = await get_current_user(request)
     
-    if len(data.photo_ids) < 3 or len(data.photo_ids) > 10:
-        raise HTTPException(status_code=400, detail="Upload 3-10 photos")
+    if len(data.photo_ids) < 1 or len(data.photo_ids) > 3:
+        raise HTTPException(status_code=400, detail="Upload 1-3 photos")
     
     if not check_credits(user, BEST_SHOT_COST):
         raise HTTPException(status_code=400, detail="Not enough credits")
@@ -813,27 +697,24 @@ async def get_user_jobs(request: Request):
 async def get_next_photo_to_rate(request: Request):
     user = await get_current_user(request)
     
-    # Pro users don't earn credits, but can still rate
     tier = user.get("tier", "free")
     
-    if tier != "pro":
-        # Check daily limit for non-Pro users
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        today_ratings = await db.ratings.count_documents({
-            "rater_id": user["user_id"],
-            "created_at": {"$gte": today_start.isoformat()}
-        })
-        
-        max_ratings = TIER_CONFIG["free"]["max_daily_earned_credits"] * TIER_CONFIG["free"]["ratings_for_credit"]
-        if today_ratings >= max_ratings:
-            raise HTTPException(status_code=400, detail="Daily rating limit reached")
+    # Check daily limit for all users
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_ratings = await db.ratings.count_documents({
+        "rater_id": user["user_id"],
+        "created_at": {"$gte": today_start.isoformat()}
+    })
+    
+    max_ratings = TIER_CONFIG["free"]["max_daily_earned_credits"] * TIER_CONFIG["free"]["ratings_for_credit"]
+    if today_ratings >= max_ratings and tier == "free":
+        raise HTTPException(status_code=400, detail="Daily rating limit reached")
     
     # Find photo to rate (gender matched)
     user_orientation = user.get("orientation", "everyone")
     
     # Find photos from queued jobs that user hasn't rated yet
     rated_photo_ids = await db.ratings.distinct("photo_id", {"rater_id": user["user_id"]})
-    reported_photo_ids = await db.reports.distinct("photo_id", {"reporter_id": user["user_id"]})
     
     # Get queued jobs
     pipeline = [
@@ -857,30 +738,25 @@ async def get_next_photo_to_rate(request: Request):
         if user_orientation == "women" and job_user.get("gender") != "woman":
             continue
         
-        # Get first unrated, unreported photo from this job
+        # Get first unrated photo from this job
         for photo_id in job.get("photo_ids", []):
-            if photo_id not in rated_photo_ids and photo_id not in reported_photo_ids:
+            if photo_id not in rated_photo_ids:
                 photo = await db.photos.find_one({"photo_id": photo_id, "is_deleted": False}, {"_id": 0})
                 if photo:
                     # Count ratings for progress display
-                    if tier != "pro":
-                        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-                        today_ratings = await db.ratings.count_documents({
-                            "rater_id": user["user_id"],
-                            "created_at": {"$gte": today_start.isoformat()}
-                        })
-                        progress = today_ratings % TIER_CONFIG["free"]["ratings_for_credit"]
-                    else:
-                        today_ratings = 0
-                        progress = 0
+                    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                    today_ratings = await db.ratings.count_documents({
+                        "rater_id": user["user_id"],
+                        "created_at": {"$gte": today_start.isoformat()}
+                    })
+                    progress = today_ratings % TIER_CONFIG["free"]["ratings_for_credit"]
                     
                     return {
                         "photo_id": photo_id,
                         "url": photo.get("url"),
                         "job_id": job["job_id"],
                         "ratings_today": today_ratings,
-                        "progress": progress,
-                        "is_pro": tier == "pro"
+                        "progress": progress
                     }
     
     raise HTTPException(status_code=404, detail="No photos to rate right now")
@@ -923,42 +799,42 @@ async def submit_rating(data: RatingSubmit, request: Request):
         {"$inc": {"ratings_given": 1}}
     )
     
-    # Pro users don't earn credits
+    # All users now earn credits (Pro tier removed)
     earned_credit = False
     ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"]
     
-    if tier != "pro":
-        # Increment ratings_since_last_credit counter
-        await db.users.update_one(
-            {"user_id": user["user_id"]},
-            {"$inc": {"ratings_since_last_credit": 1}}
-        )
-        updated_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
-        counter = updated_user.get("ratings_since_last_credit", 0)
+    # Increment ratings_since_last_credit counter
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$inc": {"ratings_since_last_credit": 1}}
+    )
+    updated_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    counter = updated_user.get("ratings_since_last_credit", 0)
+    
+    # Now earn 1 credit per 3 reviews (changed from 5)
+    if counter >= TIER_CONFIG["free"]["ratings_for_credit"]:
+        # Check daily earning limit
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        credits_earned_today = await db.credit_earnings.count_documents({
+            "user_id": user["user_id"],
+            "created_at": {"$gte": today_start.isoformat()}
+        })
         
-        if counter >= TIER_CONFIG["free"]["ratings_for_credit"]:
-            # Check daily earning limit
-            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            credits_earned_today = await db.credit_earnings.count_documents({
+        if credits_earned_today < TIER_CONFIG["free"]["max_daily_earned_credits"]:
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": {"ratings_since_last_credit": 0}, "$inc": {"credits": 1}}
+            )
+            await db.credit_earnings.insert_one({
                 "user_id": user["user_id"],
-                "created_at": {"$gte": today_start.isoformat()}
+                "amount": 1,
+                "reason": "rating_reward",
+                "created_at": datetime.now(timezone.utc).isoformat()
             })
-            
-            if credits_earned_today < TIER_CONFIG["free"]["max_daily_earned_credits"]:
-                await db.users.update_one(
-                    {"user_id": user["user_id"]},
-                    {"$set": {"ratings_since_last_credit": 0}, "$inc": {"credits": 1}}
-                )
-                await db.credit_earnings.insert_one({
-                    "user_id": user["user_id"],
-                    "amount": 1,
-                    "reason": "rating_reward",
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                })
-                earned_credit = True
-                counter = 0
-        
-        ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"] - counter
+            earned_credit = True
+            counter = 0
+    
+    ratings_until_credit = TIER_CONFIG["free"]["ratings_for_credit"] - counter
     
     # Update photo owner's ratings earned
     photo = await db.photos.find_one({"photo_id": data.photo_id}, {"_id": 0})
@@ -971,46 +847,19 @@ async def submit_rating(data: RatingSubmit, request: Request):
     return {
         "message": "Rating submitted",
         "earned_credit": earned_credit,
-        "ratings_until_credit": ratings_until_credit if tier != "pro" else None,
-        "is_pro": tier == "pro"
+        "ratings_until_credit": ratings_until_credit
     }
 
 @api_router.post("/rate/report")
 async def report_photo(request: Request, photo_id: str):
     user = await get_current_user(request)
-
-    # Prevent duplicate reports from same user
-    existing_report = await db.reports.find_one({
-        "reporter_id": user["user_id"],
-        "photo_id": photo_id
-    })
-    if existing_report:
-        return {"message": "Already reported"}
-
     await db.reports.insert_one({
         "report_id": str(uuid.uuid4()),
         "reporter_id": user["user_id"],
         "photo_id": photo_id,
         "created_at": datetime.now(timezone.utc).isoformat()
     })
-
-    # Increment report count on photo
-    await db.photos.update_one(
-        {"photo_id": photo_id},
-        {"$inc": {"report_count": 1}}
-    )
-
-    # Auto-hide photo if it reaches 3 reports
-    photo = await db.photos.find_one({"photo_id": photo_id}, {"_id": 0})
-    if photo and photo.get("report_count", 0) >= 3:
-        await db.photos.update_one(
-            {"photo_id": photo_id},
-            {"$set": {"is_deleted": True}}
-        )
-        # Also mark the job as needing review if this was the only photo
-        logger.warning(f"Photo {photo_id} auto-hidden after 3 reports")
-
-    return {"message": "Photo reported. Thank you for keeping MatchMe safe."}
+    return {"message": "Photo reported"}
 
 # ==================== DASHBOARD ====================
 @api_router.get("/user/dashboard")
@@ -1043,21 +892,19 @@ async def get_dashboard(request: Request):
             "user_id": user["user_id"],
             "name": user.get("name"),
             "email": user.get("email"),
-            "credits": user.get("credits", 0) if tier != "pro" else None,
+            "credits": user.get("credits", 0),
             "tier": tier
         },
         "recent_jobs": jobs,
         "stats": {
             "ratings_today": today_ratings,
-            "credits_earned_today": credits_earned_today if tier != "pro" else None,
-            "can_earn_more": credits_earned_today < TIER_CONFIG["free"]["max_daily_earned_credits"] if tier != "pro" else None,
-            "ratings_for_credit": TIER_CONFIG["free"]["ratings_for_credit"] if tier != "pro" else None,
-            "is_pro": tier == "pro"
+            "credits_earned_today": credits_earned_today,
+            "can_earn_more": credits_earned_today < TIER_CONFIG["free"]["max_daily_earned_credits"],
+            "ratings_for_credit": TIER_CONFIG["free"]["ratings_for_credit"]
         },
         "tier_info": {
             "min_ratings": tier_config.get("min_ratings"),
-            "time_cap_hours": tier_config.get("time_cap_hours"),
-            "unlimited": tier_config.get("unlimited", False)
+            "time_cap_hours": tier_config.get("time_cap_hours")
         }
     }
 
@@ -1332,230 +1179,182 @@ async def trigger_job_worker(request: Request):
     await run_job_worker()
     return {"message": "Job worker executed"}
 
-# ==================== RAZORPAY SUBSCRIPTIONS ====================
-RAZORPAY_PRODUCTS = {
+# ==================== STRIPE SUBSCRIPTIONS ====================
+STRIPE_PRODUCTS = {
     "priority": {
         "name": "Priority",
-        "price_inr": 749,  # ₹749/month (~$9)
-        "price_paise": 74900,
-        "credits": 12,
-        "period": "monthly",
-        "interval": 1,
-    },
-    "pro": {
-        "name": "Pro",
-        "price_inr": 2099,  # ₹2099/month (~$25)
-        "price_paise": 209900,
-        "credits": None,  # Unlimited
-        "period": "monthly",
-        "interval": 1,
+        "price": 9.00,
+        "credits": 15,  # Updated from 12 to 15
     }
 }
 
-# Cache for Razorpay plan IDs (created once, reused)
-_razorpay_plan_ids = {}
-
-async def get_or_create_razorpay_plan(package_id: str) -> str:
-    """Get or create a Razorpay plan for a package"""
-    global _razorpay_plan_ids
-    
-    if package_id in _razorpay_plan_ids:
-        return _razorpay_plan_ids[package_id]
-    
-    # Check DB for cached plan ID
-    plan_doc = await db.razorpay_plans.find_one({"package_id": package_id}, {"_id": 0})
-    if plan_doc:
-        _razorpay_plan_ids[package_id] = plan_doc["plan_id"]
-        return plan_doc["plan_id"]
-    
-    # Create new plan in Razorpay
-    product = RAZORPAY_PRODUCTS[package_id]
-    plan_data = {
-        "period": product["period"],
-        "interval": product["interval"],
-        "item": {
-            "name": f"MatchMe {product['name']}",
-            "amount": product["price_paise"],
-            "currency": "INR",
-            "description": f"MatchMe {product['name']} - Monthly Subscription"
-        }
-    }
-    
-    plan = await asyncio.to_thread(razorpay_client.plan.create, data=plan_data)
-    plan_id = plan["id"]
-    
-    # Cache it
-    _razorpay_plan_ids[package_id] = plan_id
-    await db.razorpay_plans.insert_one({
-        "package_id": package_id,
-        "plan_id": plan_id,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    })
-    
-    logger.info(f"Created Razorpay plan {plan_id} for {package_id}")
-    return plan_id
-
 @api_router.post("/payments/subscribe")
 async def create_subscription(data: CheckoutRequest, request: Request):
-    """Create a Razorpay subscription for checkout"""
+    """Create a Stripe subscription checkout session"""
     user = await get_current_user(request)
     
-    if not razorpay_client:
-        logger.error("Razorpay is not configured")
-        raise HTTPException(status_code=500, detail="Payment system not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.")
-    
-    if data.package_id not in RAZORPAY_PRODUCTS:
+    if data.package_id not in STRIPE_PRODUCTS:
         raise HTTPException(status_code=400, detail="Invalid package")
     
-    try:
-        # Get or create the plan
-        plan_id = await get_or_create_razorpay_plan(data.package_id)
-        
-        # Create subscription
-        sub_data = {
-            "plan_id": plan_id,
-            "customer_notify": 1,
-            "total_count": 12,  # 12 billing cycles max
-            "notes": {
-                "user_id": user["user_id"],
-                "package_id": data.package_id
-            }
-        }
-        
-        subscription = await asyncio.to_thread(razorpay_client.subscription.create, data=sub_data)
-        
-        return {
-            "subscription_id": subscription["id"],
-            "razorpay_key_id": RAZORPAY_KEY_ID,
-            "amount": RAZORPAY_PRODUCTS[data.package_id]["price_paise"],
-            "currency": "INR",
-            "name": f"MatchMe {RAZORPAY_PRODUCTS[data.package_id]['name']}",
-            "description": f"MatchMe {RAZORPAY_PRODUCTS[data.package_id]['name']} Monthly Subscription",
-            "prefill": {
-                "name": user.get("name", ""),
-                "email": user.get("email", "")
-            }
-        }
+    product = STRIPE_PRODUCTS[data.package_id]
     
-    except Exception as e:
-        logger.error(f"Razorpay subscription error: {e}")
-        raise HTTPException(status_code=500, detail=f"Payment error: {str(e)}")
-
-@api_router.post("/payments/verify")
-async def verify_payment(data: RazorpayVerifyRequest, request: Request):
-    """Verify Razorpay payment signature and activate subscription"""
-    user = await get_current_user(request)
-    
-    if not razorpay_client:
-        raise HTTPException(status_code=500, detail="Payment system not configured")
-    
-    try:
-        # Verify the payment signature
-        params_dict = {
-            "razorpay_payment_id": data.razorpay_payment_id,
-            "razorpay_subscription_id": data.razorpay_subscription_id,
-            "razorpay_signature": data.razorpay_signature
-        }
-        
-        await asyncio.to_thread(
-            razorpay_client.utility.verify_payment_signature, params_dict
+    # Create or get Stripe customer
+    customer_id = user.get("stripe_customer_id")
+    if not customer_id:
+        customer = stripe.Customer.create(
+            email=user["email"],
+            name=user.get("name"),
+            metadata={"user_id": user["user_id"]}
         )
-        
-        # Signature verified — activate the subscription
-        package_id = data.package_id
-        if package_id not in RAZORPAY_PRODUCTS:
-            raise HTTPException(status_code=400, detail="Invalid package")
-        
-        update_fields = {
-            "tier": package_id,
-            "razorpay_subscription_id": data.razorpay_subscription_id,
-            "razorpay_payment_id": data.razorpay_payment_id,
-            "subscription_start_date": datetime.now(timezone.utc).isoformat()
-        }
-        
-        if package_id == "priority":
-            update_fields["credits"] = RAZORPAY_PRODUCTS["priority"]["credits"]
-        
+        customer_id = customer.id
         await db.users.update_one(
             {"user_id": user["user_id"]},
-            {"$set": update_fields}
+            {"$set": {"stripe_customer_id": customer_id}}
         )
+    
+    # Create checkout session for subscription
+    success_url = f"{data.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{data.origin_url}/pricing"
+    
+    session = stripe.checkout.Session.create(
+        customer=customer_id,
+        payment_method_types=["card"],
+        line_items=[{
+            "price_data": {
+                "currency": "usd",
+                "product_data": {
+                    "name": f"MatchMe {product['name']}",
+                    "description": f"${product['price']}/month subscription"
+                },
+                "unit_amount": int(product["price"] * 100),
+                "recurring": {"interval": "month"}
+            },
+            "quantity": 1
+        }],
+        mode="subscription",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={
+            "user_id": user["user_id"],
+            "package_id": data.package_id
+        }
+    )
+    
+    return {"url": session.url, "session_id": session.id}
+
+@api_router.get("/payments/status/{session_id}")
+async def get_payment_status(session_id: str, request: Request):
+    user = await get_current_user(request)
+    
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
         
-        logger.info(f"Subscription activated for {user['user_id']}: {package_id}")
+        if session.payment_status == "paid" or session.status == "complete":
+            # Get subscription details
+            subscription_id = session.subscription
+            package_id = session.metadata.get("package_id")
+            
+            if subscription_id and package_id:
+                # Update user tier and credits
+                update_fields = {"tier": package_id, "stripe_subscription_id": subscription_id}
+                
+                if package_id == "priority":
+                    update_fields["credits"] = STRIPE_PRODUCTS["priority"]["credits"]
+                    update_fields["subscription_start_date"] = datetime.now(timezone.utc).isoformat()
+                
+                await db.users.update_one(
+                    {"user_id": user["user_id"]},
+                    {"$set": update_fields}
+                )
         
         return {
-            "status": "success",
-            "tier": package_id,
-            "message": f"Welcome to MatchMe {RAZORPAY_PRODUCTS[package_id]['name']}!"
+            "session_id": session_id,
+            "status": session.status,
+            "payment_status": session.payment_status,
+            "subscription_id": session.subscription
         }
-    
-    except razorpay.errors.SignatureVerificationError:
-        logger.error(f"Payment signature verification failed for user {user['user_id']}")
-        raise HTTPException(status_code=400, detail="Payment verification failed. Please contact support.")
     except Exception as e:
-        logger.error(f"Payment verification error: {e}")
-        raise HTTPException(status_code=500, detail=f"Payment verification error: {str(e)}")
+        logger.error(f"Error checking payment status: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
-@api_router.post("/webhook/razorpay")
-async def razorpay_webhook(request: Request):
-    """Handle Razorpay webhooks for subscription events"""
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhooks for subscriptions"""
     body = await request.body()
-    signature = request.headers.get("X-Razorpay-Signature", "")
+    signature = request.headers.get("Stripe-Signature")
     
-    # Verify webhook signature if secret is set
-    if RAZORPAY_WEBHOOK_SECRET:
-        try:
-            await asyncio.to_thread(
-                razorpay_client.utility.verify_webhook_signature,
-                body.decode("utf-8"), signature, RAZORPAY_WEBHOOK_SECRET
-            )
-        except Exception as e:
-            logger.error(f"Webhook signature verification failed: {e}")
-            raise HTTPException(status_code=400, detail="Invalid webhook signature")
-    
-    import json as _json
+    # For now, process without signature verification (add webhook secret in production)
     try:
-        payload = _json.loads(body)
-    except Exception:
+        payload = body.decode("utf-8")
+        event = stripe.Event.construct_from(
+            stripe.util.convert_to_dict(stripe.util.json.loads(payload)),
+            stripe.api_key
+        )
+    except Exception as e:
+        logger.error(f"Webhook parsing error: {e}")
         raise HTTPException(status_code=400, detail="Invalid payload")
     
-    event = payload.get("event", "")
-    payment_entity = payload.get("payload", {})
+    event_type = event.type
+    data = event.data.object
     
-    logger.info(f"Razorpay webhook: {event}")
+    logger.info(f"Stripe webhook: {event_type}")
     
-    if event == "subscription.charged":
-        # Recurring payment successful — renew credits for Priority
-        sub_entity = payment_entity.get("subscription", {}).get("entity", {})
-        subscription_id = sub_entity.get("id")
+    if event_type == "customer.subscription.created":
+        # Subscription created - activate tier
+        customer_id = data.customer
+        subscription_id = data.id
         
-        if subscription_id:
-            user = await db.users.find_one({"razorpay_subscription_id": subscription_id}, {"_id": 0})
-            if user and user.get("tier") == "priority":
-                await db.users.update_one(
-                    {"user_id": user["user_id"]},
-                    {"$set": {
-                        "credits": RAZORPAY_PRODUCTS["priority"]["credits"],
-                        "subscription_start_date": datetime.now(timezone.utc).isoformat()
-                    }}
-                )
-                logger.info(f"Priority credits renewed for {user['user_id']}")
+        user = await db.users.find_one({"stripe_customer_id": customer_id}, {"_id": 0})
+        if user:
+            # Only Priority tier available now
+            amount = data.items.data[0].price.unit_amount / 100
+            tier = "priority" if amount == 9 else "free"
+            
+            update_fields = {
+                "tier": tier,
+                "stripe_subscription_id": subscription_id,
+                "subscription_start_date": datetime.now(timezone.utc).isoformat()
+            }
+            
+            if tier == "priority":
+                update_fields["credits"] = STRIPE_PRODUCTS["priority"]["credits"]
+            
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": update_fields}
+            )
+            logger.info(f"Subscription created for {user['user_id']}: {tier}")
     
-    elif event in ("subscription.cancelled", "subscription.completed"):
-        sub_entity = payment_entity.get("subscription", {}).get("entity", {})
-        subscription_id = sub_entity.get("id")
+    elif event_type == "invoice.paid":
+        # Subscription renewed - reset credits for Priority
+        subscription_id = data.subscription
         
-        if subscription_id:
-            user = await db.users.find_one({"razorpay_subscription_id": subscription_id}, {"_id": 0})
-            if user:
-                await db.users.update_one(
-                    {"user_id": user["user_id"]},
-                    {"$set": {
-                        "tier": "free",
-                        "razorpay_subscription_id": None
-                    }}
-                )
-                logger.info(f"Subscription ended for {user['user_id']}, downgraded to free")
+        user = await db.users.find_one({"stripe_subscription_id": subscription_id}, {"_id": 0})
+        if user and user.get("tier") == "priority":
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": {
+                    "credits": STRIPE_PRODUCTS["priority"]["credits"],
+                    "subscription_start_date": datetime.now(timezone.utc).isoformat()
+                }}
+            )
+            logger.info(f"Priority credits reset for {user['user_id']}")
+    
+    elif event_type == "customer.subscription.deleted":
+        # Subscription cancelled - downgrade to free
+        subscription_id = data.id
+        
+        user = await db.users.find_one({"stripe_subscription_id": subscription_id}, {"_id": 0})
+        if user:
+            # Keep remaining credits for Priority users
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": {
+                    "tier": "free",
+                    "stripe_subscription_id": None
+                }}
+            )
+            logger.info(f"Subscription cancelled for {user['user_id']}, downgraded to free")
     
     return {"received": True}
 
@@ -1564,79 +1363,23 @@ async def cancel_subscription(request: Request):
     """Cancel user's subscription"""
     user = await get_current_user(request)
     
-    subscription_id = user.get("razorpay_subscription_id")
+    subscription_id = user.get("stripe_subscription_id")
     if not subscription_id:
         raise HTTPException(status_code=400, detail="No active subscription")
     
     try:
-        await asyncio.to_thread(
-            razorpay_client.subscription.cancel, subscription_id
-        )
+        stripe.Subscription.delete(subscription_id)
         
-        # Update user immediately for UX (webhook will also fire)
+        # Update user (webhook will also fire, but update immediately for UX)
         await db.users.update_one(
             {"user_id": user["user_id"]},
-            {"$set": {"tier": "free", "razorpay_subscription_id": None}}
+            {"$set": {"tier": "free", "stripe_subscription_id": None}}
         )
         
         return {"message": "Subscription cancelled"}
     except Exception as e:
         logger.error(f"Error cancelling subscription: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
-@api_router.get("/admin/reports")
-async def get_reported_photos(request: Request):
-    """Admin endpoint to review reported photos"""
-    user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-
-    # Get photos with 1+ reports (including auto-hidden ones)
-    pipeline = [
-        {"$match": {"report_count": {"$gte": 1}}},
-        {"$sort": {"report_count": -1}},
-        {"$limit": 50}
-    ]
-    photos = await db.photos.aggregate(pipeline).to_list(50)
-    for p in photos:
-        p.pop("_id", None)
-    return photos
-
-@api_router.post("/admin/photos/{photo_id}/restore")
-async def restore_photo(photo_id: str, request: Request):
-    """Admin: restore a falsely reported photo"""
-    user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-
-    await db.photos.update_one(
-        {"photo_id": photo_id},
-        {"$set": {"is_deleted": False, "report_count": 0}}
-    )
-    # Clear all reports for this photo
-    await db.reports.delete_many({"photo_id": photo_id})
-    return {"message": "Photo restored"}
-
-@api_router.delete("/admin/photos/{photo_id}")
-async def admin_delete_photo(photo_id: str, request: Request):
-    """Admin: permanently remove a reported photo"""
-    user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-
-    photo = await db.photos.find_one({"photo_id": photo_id}, {"_id": 0})
-    if photo:
-        try:
-            await asyncio.to_thread(
-                cloudinary.uploader.destroy,
-                photo["public_id"],
-                invalidate=True
-            )
-        except Exception as e:
-            logger.error(f"Cloudinary delete failed: {e}")
-    
-    await db.photos.update_one({"photo_id": photo_id}, {"$set": {"is_deleted": True}})
-    return {"message": "Photo deleted"}
 
 # ==================== HEALTH CHECK ====================
 @api_router.get("/")
@@ -1646,36 +1389,29 @@ async def root():
 @api_router.get("/health")
 async def health():
     return {"status": "ok"}
-# CORS
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://matchme-two.vercel.app")
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=[
-        FRONTEND_URL,
-        "https://matchme-two.vercel.app",
-        "https://matchme-three.vercel.app",
-        "https://matchme-gje02qajp-bigdawws-projects.vercel.app",
-        "http://localhost:3000",
-    ],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Include the router in the main app
 app.include_router(api_router)
 
-
+# CORS
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://matchme-preview.preview.emergentagent.com")
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=[FRONTEND_URL, "http://localhost:3000", "https://matchme-preview.preview.emergentagent.com"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ==================== BACKGROUND TASK SCHEDULER ====================
 async def scheduler():
-    """Run job worker every 15 minutes"""
+    """Run job worker every 2 minutes for faster results"""
     while True:
         try:
             await run_job_worker()
         except Exception as e:
             logger.error(f"Job worker error: {e}")
-        await asyncio.sleep(15 * 60)  # 15 minutes
+        await asyncio.sleep(2 * 60)  # 2 minutes instead of 15
 
 # ==================== STARTUP ====================
 @app.on_event("startup")
@@ -1687,7 +1423,7 @@ async def startup():
         # Create indexes
         await db.users.create_index("email", unique=True)
         await db.users.create_index("user_id", unique=True)
-        await db.users.create_index("razorpay_subscription_id", sparse=True)
+        await db.users.create_index("stripe_customer_id", sparse=True)
         await db.photos.create_index("user_id")
         await db.photos.create_index("photo_id", unique=True)
         await db.jobs.create_index("user_id")
@@ -1713,11 +1449,9 @@ async def startup():
                 "gender": None,
                 "orientation": None,
                 "dating_app": None,
-                "tier": "pro",
+                "tier": "priority",  # Admin now gets priority tier (no pro tier)
                 "stripe_customer_id": None,
                 "stripe_subscription_id": None,
-                "razorpay_subscription_id": None,
-                "razorpay_payment_id": None,
                 "ratings_given": 0,
                 "ratings_earned": 0,
                 "onboarding_completed": True,
@@ -1728,41 +1462,44 @@ async def startup():
         
         # Start background scheduler
         asyncio.create_task(scheduler())
-        logger.info("Background job scheduler started (15 min interval)")
+        logger.info("Background job scheduler started (2 min interval)")
         
     except Exception as e:
         logger.error(f"Startup error: {e}")
     
     logger.info("Cloudinary configured")
     logger.info("Resend email configured")
-    if razorpay_client:
-        logger.info(f"Razorpay configured (key: {RAZORPAY_KEY_ID[:12]}...)")
-    else:
-        logger.warning("⚠️  RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET not set — payments will fail!")
+    logger.info("Stripe configured")
     
     # Write test credentials
-    os.makedirs("memory", exist_ok=True)
-    with open("memory/test_credentials.md", "w") as f:
+    os.makedirs("/app/memory", exist_ok=True)
+    with open("/app/memory/test_credentials.md", "w") as f:
         f.write(f"""# Test Credentials
 
 ## Admin Account
 - Email: admin@matchme.com
 - Password: AdminMatch2024!
 - Role: admin
+- Tier: Priority (with 999 credits)
 
-## Tier Structure
-- Free: 3 ratings OR 24hrs, 3 credits on signup, earn 1 per 5 ratings
-- Priority ($9/mo): 7 ratings OR 4hrs, 12 credits/month
-- Pro ($25/mo): 10 ratings OR 4hrs, unlimited uploads, no credits
+## Tier Structure (UPDATED)
+- **Free**: Reviews shown immediately, 3 credits on signup, earn 1 credit per 3 reviews (changed from 5)
+- **Priority ($9/mo)**: 10 ratings minimum (changed from 7), 4hrs timeout, 15 credits/month (changed from 12)
+- **Pro tier removed**
 
 ## Credit Costs
 - Best Shot: 1 credit
 - Profile Analysis: 2 credits
 
+## Credit Earning
+- Free users: Earn 1 credit for every 3 profile reviews (changed from 5)
+- Daily limit: 10 credits max (changed from 5)
+
 ## Background Worker
 - Runs every 15 minutes
-- Processes jobs based on tier conditions
-- Awards 0.2 credits to raters on job completion
+- Free users: Results shown as soon as 1 review arrives (immediate feedback)
+- Priority users: Results shown after 10 reviews OR 4 hours
+- Awards bonus credits to raters on job completion
 
 ## API Endpoints
 - POST /api/auth/register
