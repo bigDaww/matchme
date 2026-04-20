@@ -54,7 +54,7 @@ cloudinary.config(
 
 # Resend Configuration
 resend.api_key = os.environ.get("RESEND_API_KEY")
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "noreply@matchme.app")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "MatchMe <noreply@matchme.live>")
 
 # ==================== TIER CONFIGURATION ====================
 TIER_CONFIG = {
