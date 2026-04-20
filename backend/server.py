@@ -166,7 +166,7 @@ async def send_email(to_email: str, subject: str, html_content: str):
 
 async def send_results_email(user_email: str, user_name: str, job_type: str, job_id: str, rater_count: int, low_confidence: bool = False):
     """Send notification when job is complete"""
-    frontend_url = os.environ.get("FRONTEND_URL", "https://matchme-preview.preview.emergentagent.com")
+    frontend_url = os.environ.get("FRONTEND_URL", "https://matchme.live")
     results_url = f"{frontend_url}/results/{job_id}"
     
     subject = f"[{rater_count}] people reviewed your photos — see results"
@@ -223,7 +223,7 @@ async def send_results_email(user_email: str, user_name: str, job_type: str, job
 
 async def send_job_failed_email(user_email: str, user_name: str, job_type: str, refunded: bool = False, refund_amount: int = 0):
     """Send apology email when job fails due to insufficient ratings"""
-    frontend_url = os.environ.get("FRONTEND_URL", "https://matchme-preview.preview.emergentagent.com")
+    frontend_url = os.environ.get("FRONTEND_URL", "https://matchme.live")
     
     subject = "We couldn't complete your photo review"
     
@@ -1179,11 +1179,17 @@ async def health():
 app.include_router(api_router)
 
 # CORS
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://matchme-preview.preview.emergentagent.com")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://matchme.live")
+ALLOWED_ORIGINS = [
+    FRONTEND_URL,
+    "https://matchme.live",
+    "https://www.matchme.live",
+    "http://localhost:3000",
+]
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000", "https://matchme-preview.preview.emergentagent.com"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
